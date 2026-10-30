@@ -1,7 +1,37 @@
 import asyncio
 from maibot_sdk import MaiBotPlugin, PluginConfigBase, Field, HookHandler
 from maibot_sdk.types import HookMode, HookOrder
-from engine import compile_rules, first_match
+import importlib.util
+from pathlib import Path
+import sys
+
+
+def _load_engine():
+    # MaiBot may load this entry by file path without adding its directory
+    # to sys.path or creating a parent package. Resolve our sibling explicitly.
+    module_name = __name__ + "_watch_dog_engine"
+    spec = importlib.util.spec_from_file_location(
+        module_name, Path(__file__).resolve().with_name("engine.py")
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("Cannot load Watch Dog engine.py")
+    module = importlib.util.module_from_spec(spec)
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module  # Required by dataclasses during execution.
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise
+    return module
+
+
+_engine = _load_engine()
+compile_rules = _engine.compile_rules
+first_match = _engine.first_match
 
 class WatchDogConfig(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用消息过滤")
