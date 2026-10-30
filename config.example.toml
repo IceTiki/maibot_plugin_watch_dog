@@ -1,0 +1,15 @@
+enabled = true
+
+[[rules]]
+name = "指定群图文过滤"
+enabled = true
+scope = "groups"
+ids = ["20001"]
+reply = "这类消息暂不处理。"
+conditions = [{kind = "image"}, {kind = "text_regex", pattern = "广告|推广"}]
+
+[[rules]]
+name = "全局转发过滤"
+scope = "global"
+reply = ""
+conditions = [{kind = "forward"}]

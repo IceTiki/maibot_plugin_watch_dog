@@ -1,0 +1,1 @@
+maibot-plugin-sdk>=2.0,<3

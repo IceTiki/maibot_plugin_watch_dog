@@ -1,0 +1,33 @@
+{
+  "manifest_version": 2,
+  "id": "local.watch-dog",
+  "version": "0.1.0",
+  "name": "Watch Dog",
+  "description": "规则消息过滤",
+  "author": {
+    "name": "Tiki",
+    "url": "https://github.com/"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "9.99.99"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "capabilities": [
+    "send.text"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "locales_path": "i18n",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  }
+}
