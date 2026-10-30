@@ -33,8 +33,12 @@ _engine = _load_engine()
 compile_rules = _engine.compile_rules
 first_match = _engine.first_match
 
-class WatchDogConfig(PluginConfigBase):
+class PluginSettings(PluginConfigBase):
+    config_version: str = Field(default="0.1.1", description="配置版本号")
     enabled: bool = Field(default=True, description="启用消息过滤")
+
+class WatchDogConfig(PluginConfigBase):
+    plugin: PluginSettings = Field(default_factory=PluginSettings)
     rules: list[dict] = Field(default_factory=list, description="按顺序匹配的过滤规则")
 
 class WatchDogPlugin(MaiBotPlugin):

@@ -36,7 +36,7 @@ def compile_rules(data):
         if not conditions:
             raise ValueError(f"{name}: empty conditions")
         result.append(Rule(name, scope, ids, tuple(conditions), item.get("reply", "")))
-    return tuple(result) if data.get("enabled", True) else ()
+    return tuple(result) if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else ()
 
 
 def inspect_message(message):

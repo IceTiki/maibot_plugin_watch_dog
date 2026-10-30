@@ -19,3 +19,23 @@
 python -m unittest discover -s tests -v
 
 尚未在实际服务器验收。插件依赖适配器的结构化消息；缺少会话 ID 时仍屏蔽，但无法自动回复。
+
+## 从 0.1.0 修复配置
+
+更新到 0.1.1 后，在原始 TOML 编辑器中补上以下配置节并保存。已有的 `[[rules]]` 保持顶层，不要改成 `[[plugin.rules]]`。如果已有顶层 `enabled`，将它移动到 `[plugin]` 下，避免两处开关。
+
+```toml
+[plugin]
+config_version = "0.1.1"
+enabled = true
+```
+
+配置节可放在现有规则之前。空规则的完整初始配置如下（`rules` 必须在 `[plugin]` 之前）：
+
+```toml
+rules = []
+
+[plugin]
+config_version = "0.1.1"
+enabled = true
+```
