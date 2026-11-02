@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "local.watch-dog",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "name": "Watch Dog",
   "description": "规则消息过滤",
   "author": {
@@ -21,7 +21,8 @@
     "max_version": "2.99.99"
   },
   "capabilities": [
-    "send.text"
+    "send.text",
+    "chat.open_session"
   ],
   "i18n": {
     "default_locale": "zh-CN",

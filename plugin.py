@@ -63,11 +63,47 @@ class WatchDogPlugin(MaiBotPlugin):
             return
         self._rules = rules
 
-    async def _reply(self, text, stream_id):
+    async def _resolve_stream_id(self, message, kwargs):
+        for source in (message, kwargs):
+            for key in ("stream_id", "session_id", "chat_id"):
+                if source.get(key):
+                    return str(source[key])
+        info = message.get("message_info") or message
+        group = info.get("group_info") or {}
+        user = info.get("user_info") or {}
+        platform = info.get("platform") or group.get("platform") or user.get("platform")
+        if not platform:
+            raise ValueError("Missing platform")
+        if group.get("group_id") is not None:
+            kind, target = "group", {"group_id": str(group["group_id"])}
+        elif user.get("user_id") is not None:
+            kind, target = "private", {"user_id": str(user["user_id"])}
+        else:
+            raise ValueError("Missing recipient")
+        additional = info.get("additional_config") or message.get("additional_config") or {}
+        for key in ("account_id", "scope"):
+            value = info.get(key) or message.get(key) or additional.get(key)
+            if key == "account_id":
+                value = value or additional.get("platform_io_account_id")
+            if value:
+                target[key] = str(value)
+        session = await self.ctx.chat.open_session(platform=str(platform), chat_type=kind, **target)
+        identity = session.get("stream_id") or session.get("session_id")
+        if not identity:
+            raise ValueError("Missing session identity in open_session result")
+        return str(identity)
+
+    async def _send_reply(self, text, message, kwargs):
+        stream_id = await self._resolve_stream_id(message, kwargs)
+        sent = await self.ctx.send.text(text, stream_id)
+        if sent is False:
+            self.ctx.logger.warning("Watch Dog 自动回复发送失败，消息保持屏蔽")
+
+    async def _reply(self, text, message, kwargs):
         try:
-            await asyncio.wait_for(self.ctx.send.text(text, stream_id), timeout=5)
-        except Exception:
-            self.ctx.logger.warning("Watch Dog 自动回复失败，消息保持屏蔽")
+            await asyncio.wait_for(self._send_reply(text, message, kwargs), timeout=5)
+        except Exception as exc:
+            self.ctx.logger.warning("Watch Dog 会话解析或自动回复失败（%s），消息保持屏蔽", type(exc).__name__)
 
     @HookHandler("chat.receive.before_process", mode=HookMode.BLOCKING, order=HookOrder.EARLY)
     async def filter_message(self, **kwargs):
@@ -76,13 +112,10 @@ class WatchDogPlugin(MaiBotPlugin):
         if rule is None:
             return {"action": "continue"}
         self.ctx.logger.info("Watch Dog 命中规则 %s，消息 %s", rule.name, message.get("message_id", "unknown"))
-        stream_id = message.get("stream_id") or message.get("chat_id") or kwargs.get("stream_id")
-        if rule.reply and stream_id:
-            task = asyncio.create_task(self._reply(rule.reply, stream_id))
+        if rule.reply:
+            task = asyncio.create_task(self._reply(rule.reply, message, kwargs))
             self._tasks.add(task)
             task.add_done_callback(self._tasks.discard)
-        elif rule.reply:
-            self.ctx.logger.warning("Watch Dog 缺少会话 ID，已屏蔽但无法自动回复")
         return {"action": "abort"}
 
 def create_plugin():
