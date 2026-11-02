@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "local.watch-dog",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "name": "Watch Dog",
   "description": "规则消息过滤",
   "author": {
@@ -22,7 +22,10 @@
   },
   "capabilities": [
     "send.text",
-    "chat.open_session"
+    "chat.open_session",
+    "maisaka.context.append",
+    "message.get_by_id",
+    "config.get"
   ],
   "i18n": {
     "default_locale": "zh-CN",

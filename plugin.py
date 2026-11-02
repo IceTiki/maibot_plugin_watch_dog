@@ -1,4 +1,5 @@
 import asyncio
+import random
 from maibot_sdk import MaiBotPlugin, PluginConfigBase, Field, HookHandler
 from maibot_sdk.types import HookMode, HookOrder
 import importlib.util
@@ -38,6 +39,7 @@ class PluginSettings(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用消息过滤")
 
 class WatchDogConfig(PluginConfigBase):
+    context_only: list[dict] = Field(default_factory=list, description="按群和发送者控制 Planner 放行概率")
     plugin: PluginSettings = Field(default_factory=PluginSettings)
     rules: list[dict] = Field(default_factory=list, description="按顺序匹配的过滤规则")
 
@@ -46,7 +48,9 @@ class WatchDogPlugin(MaiBotPlugin):
 
     async def on_load(self):
         self._tasks = set()
-        self._rules = compile_rules(self.get_plugin_config_data())
+        config = self.get_plugin_config_data()
+        self._rules = compile_rules(config)
+        self._context_rules = _engine.compile_context_rules(config)
 
     async def on_unload(self):
         for task in self._tasks:
@@ -58,10 +62,11 @@ class WatchDogPlugin(MaiBotPlugin):
             return
         try:
             rules = compile_rules(config_data)
+            context_rules = _engine.compile_context_rules(config_data)
         except (ValueError, KeyError, TypeError) as exc:
-            self.ctx.logger.error("Watch Dog 配置无效，保留原规则：%s", type(exc).__name__)
+            self.ctx.logger.error("Watch Dog 配置无效，保留原规则：%s", str(exc))
             return
-        self._rules = rules
+        self._rules, self._context_rules = rules, context_rules
 
     async def _resolve_stream_id(self, message, kwargs):
         for source in (message, kwargs):
@@ -71,7 +76,7 @@ class WatchDogPlugin(MaiBotPlugin):
         info = message.get("message_info") or message
         group = info.get("group_info") or {}
         user = info.get("user_info") or {}
-        platform = info.get("platform") or group.get("platform") or user.get("platform")
+        platform = message.get("platform") or info.get("platform") or group.get("platform") or user.get("platform")
         if not platform:
             raise ValueError("Missing platform")
         if group.get("group_id") is not None:
@@ -105,12 +110,75 @@ class WatchDogPlugin(MaiBotPlugin):
         except Exception as exc:
             self.ctx.logger.warning("Watch Dog 会话解析或自动回复失败（%s），消息保持屏蔽", type(exc).__name__)
 
+    async def _direct_interaction(self, rule, message, kwargs):
+        segments = message.get("raw_message") or []
+        targets = []
+        replies = []
+        for segment in segments:
+            kind, data = segment.get("type"), segment.get("data")
+            if kind == "at" and rule.allow_at:
+                targets.append(data.get("target_user_id") if isinstance(data, dict) else data)
+            elif kind == "reply" and rule.allow_reply:
+                replies.append(data if isinstance(data, dict) else {"target_message_id": data})
+        if not targets and not replies:
+            return False
+        bot = str(message.get("account_id") or "")
+        if not bot.isdigit():
+            bot = str(await self.ctx.config.get("bot.qq_account", "") or "")
+        if not bot:
+            return False
+        if any(str(target) == bot for target in targets):
+            return True
+        for reply in replies:
+            author = reply.get("target_message_sender_id")
+            if not author and reply.get("target_message_id"):
+                stream = await self._resolve_stream_id(message, kwargs)
+                original = await self.ctx.message.get_by_id(
+                    str(reply["target_message_id"]), stream_id=stream
+                ) or {}
+                info = original.get("message_info") or original
+                author = (info.get("user_info") or {}).get("user_id") or original.get("user_id")
+            if str(author) == bot:
+                return True
+        return False
+
+    async def _context_action(self, message, kwargs):
+        info = message.get("message_info") or message
+        user = info.get("user_info") or {}
+        group = info.get("group_info") or {}
+        key = (str(group.get("group_id")), str(user.get("user_id")))
+        rule = self._context_rules.get(key)
+        if rule is None or message.get("platform") != "qq" or rule.probability == 1:
+            return {"action": "continue"}
+        try:
+            direct = await asyncio.wait_for(self._direct_interaction(rule, message, kwargs), 4)
+        except Exception as exc:
+            self.ctx.logger.warning("Watch Dog 无法核对互动目标 (%s)，按普通消息抽样", type(exc).__name__)
+            direct = False
+        if direct or (rule.probability > 0 and random.random() < rule.probability):
+            return {"action": "continue"}
+        try:
+            await asyncio.wait_for(self._append_context(message, kwargs, user), 8)
+        except Exception as exc:
+            self.ctx.logger.warning("Watch Dog 上下文追加失败，消息 %s：%s",
+                                    message.get("message_id"), exc)
+        return {"action": "abort"}
+
+    async def _append_context(self, message, kwargs, user):
+        stream = await self._resolve_stream_id(message, kwargs)
+        result = await self.ctx.maisaka.context.append(
+            stream, message["raw_message"], message_id=message["message_id"],
+            user_info=user, replyable=True, source_kind="plugin:local.watch-dog",
+        )
+        if not isinstance(result, dict) or not result.get("success"):
+            raise RuntimeError((result or {}).get("error", "上下文追加未确认"))
+
     @HookHandler("chat.receive.before_process", mode=HookMode.BLOCKING, order=HookOrder.EARLY)
     async def filter_message(self, **kwargs):
         message = kwargs.get("message") or {}
         rule = first_match(self._rules, message)
         if rule is None:
-            return {"action": "continue"}
+            return await self._context_action(message, kwargs)
         self.ctx.logger.info("Watch Dog 命中规则 %s，消息 %s", rule.name, message.get("message_id", "unknown"))
         if rule.reply:
             task = asyncio.create_task(self._reply(rule.reply, message, kwargs))

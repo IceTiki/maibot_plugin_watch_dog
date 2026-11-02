@@ -92,3 +92,38 @@ def first_match(rules, message):
         if all(any(pattern.search(t) for t in texts) if kind == "text_regex" else kind in kinds for kind, pattern in r.conditions):
             return r
     return None
+
+
+@dataclass(frozen=True)
+class ContextRule:
+    probability: float
+    allow_at: bool
+    allow_reply: bool
+
+
+def compile_context_rules(data):
+    index = {}
+    rows = data.get("context_only", [])
+    if not isinstance(rows, list):
+        raise ValueError("context_only 必须是规则列表")
+    for n, row in enumerate(rows, 1):
+        if not isinstance(row, dict):
+            raise ValueError(f"context_only #{n}: 配置必须为表")
+        group = row.get("group_id")
+        users = row.get("user_ids")
+        if not isinstance(users, list) or not users or not all(
+            isinstance(x, (str, int)) and str(x).isascii() and str(x).isdigit()
+            for x in [group, *users]
+        ):
+            raise ValueError(f"context_only #{n}: 请填写群号和 QQ 号列表")
+        probability = row.get("planner_pass_probability", 0.0)
+        if type(probability) not in (float, int) or not 0 <= probability <= 1:
+            raise ValueError(f"context_only #{n}: 放行概率必须在 0 到 1 之间")
+        at = row.get("allow_planner_on_at_bot", True)
+        reply = row.get("allow_planner_on_reply_to_bot", True)
+        if type(at) is not bool or type(reply) is not bool:
+            raise ValueError(f"context_only #{n}: 例外开关必须是布尔值")
+        rule = ContextRule(probability, at, reply)
+        for user in users:
+            index.setdefault((str(group), str(user)), rule)
+    return index if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else {}

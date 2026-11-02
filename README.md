@@ -43,3 +43,19 @@ enabled = true
 ## 0.1.2
 
 修复预处理消息缺少会话 ID 时无法自动回复的问题；使用平台和群号/私聊用户号打开会话，保留已提供的账号路由。必须一起更新 Manifest（新增 chat.open_session 能力）并重载插件。规则配置无需修改。会话解析或发送失败仍然拦截消息。
+
+## 按发送者控制 Planner（普通模式）
+
+将以下配置追加到原始 TOML，替换群号和 QQ。
+
+```toml
+
+[[context_only]]
+group_id = "20001"
+user_ids = ["10001", "10002"]
+planner_pass_probability = 0.05
+allow_planner_on_at_bot = true
+allow_planner_on_reply_to_bot = true
+```
+
+默认概率为 0；1 表示全部放行。两个例外默认开启，关闭后按普通概率抽样。直接 @ 和引用只看外层真实消息段，自动附带的 @ 也计入。无法核对引用作者时按普通概率处理。已有屏蔽规则优先，名单重叠取第一条。未放行的消息加入麦麦当前会话上下文，不触发 Planner；不保证进入 WebUI 历史或重启后保留。追加失败会记录消息 ID 并保持拦截。

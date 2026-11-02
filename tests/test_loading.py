@@ -51,6 +51,66 @@ for name in ("host_entry", "host.plugins.watch_dog"):
         assert await plugin.filter_message(message=message) == {"action":"abort"}
         await asyncio.gather(*plugin._tasks)
         plugin.ctx.logger.warning.assert_called_once()
+    async def verify_context():
+        from unittest.mock import patch
+        plugin = module.create_plugin()
+        append = AsyncMock(return_value={"success": True})
+        lookup = AsyncMock(return_value={"message_info": {"user_info": {"user_id": "9"}}})
+        plugin.ctx = types.SimpleNamespace(
+            maisaka=types.SimpleNamespace(context=types.SimpleNamespace(append=append)),
+            message=types.SimpleNamespace(get_by_id=lookup), logger=Mock())
+        row = {"group_id": "12", "user_ids": ["34"], "planner_pass_probability": 0.05}
+        plugin._rules = ()
+        plugin._context_rules = module._engine.compile_context_rules({"context_only": [row, dict(row, planner_pass_probability=1)]})
+        user = {"user_id": "34", "user_nickname": "AI"}
+        msg = {"platform": "qq", "account_id": "9", "message_id": "123", "session_id": "s",
+               "message_info": {"group_info": {"group_id": "12"}, "user_info": user}}
+        async def check(segments, sample, expected, appended):
+            append.reset_mock()
+            msg["raw_message"] = segments
+            with patch.object(module.random, "random", return_value=sample) as draw:
+                result = await plugin.filter_message(message=msg)
+                assert draw.call_count <= 1
+            assert result["action"] == expected, result
+            assert append.await_count == int(appended)
+            if appended:
+                assert append.await_args.args == ("s", segments)
+                assert append.await_args.kwargs["user_info"] == user
+                assert append.await_args.kwargs["message_id"] == "123"
+                assert append.await_args.kwargs["replyable"] is True
+        ordinary = [{"type": "text", "data": "hello"}]
+        at = [{"type": "at", "data": {"target_user_id": "9"}}]
+        quote = [{"type": "reply", "data": {"target_message_sender_id": "9"}}]
+        await check(ordinary, 0.049, "continue", False)
+        await check(ordinary, 0.05, "abort", True)
+        await check(at, 0.8, "continue", False)
+        await check(quote, 0.8, "continue", False)
+        await check([{"type":"reply","data":{"target_message_id":"42"}}], 0.8, "continue", False)
+        lookup.assert_awaited_once_with("42", stream_id="s")
+        lookup.return_value = None
+        await check([{"type":"reply","data":{"target_message_id":"42"}}], 0.8, "abort", True)
+        msg["message_info"]["group_info"]["group_id"] = "99"
+        await check(ordinary, 0.8, "continue", False)
+        msg["message_info"]["group_info"]["group_id"] = "12"
+        async def configure(**overrides):
+            await plugin.on_config_update("self", {"context_only":[dict(row, **overrides)]}, "")
+        await configure(planner_pass_probability=1)
+        await check(ordinary, 0.99, "continue", False)
+        await configure(planner_pass_probability=0, allow_planner_on_at_bot=False)
+        await check(at, 0, "abort", True)
+        await check(at+quote, 0.99, "continue", False)
+        await configure(planner_pass_probability=0, allow_planner_on_reply_to_bot=False)
+        await check(quote, 0, "abort", True)
+        await check(at+quote, 0.99, "continue", False)
+        old = plugin._context_rules
+        for invalid in [-1, 1.01, float("nan"), True, "0.1"]:
+            await configure(planner_pass_probability=invalid)
+            assert plugin._context_rules is old
+        append.side_effect = RuntimeError("failure")
+        await check(ordinary, 0, "abort", True)
+        plugin._rules = module.compile_rules({"rules":[{"name":"block","conditions":[{"kind":"text_regex","pattern":"hello"}]}]})
+        await check(ordinary, 0, "abort", False)
+    asyncio.run(verify_context())
     asyncio.run(verify_reply())
     rules = module.compile_rules({"rules": [{"name": "test", "conditions": [{"kind": "image"}]}]})
     assert module.first_match(rules, {"raw_message": [{"type": "image", "data": "x"}]}).name == "test"
