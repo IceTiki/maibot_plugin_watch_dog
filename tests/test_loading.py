@@ -59,7 +59,7 @@ for name in ("host_entry", "host.plugins.watch_dog"):
         plugin.ctx = types.SimpleNamespace(
             maisaka=types.SimpleNamespace(context=types.SimpleNamespace(append=append)),
             message=types.SimpleNamespace(get_by_id=lookup), logger=Mock())
-        row = {"group_id": "12", "user_ids": ["34"], "planner_pass_probability": 0.05}
+        row = {"user_ids": ["34"], "planner_pass_probability": 0.05}
         plugin._rules = ()
         plugin._context_rules = module._engine.compile_context_rules({"context_only": [row, dict(row, planner_pass_probability=1)]})
         user = {"user_id": "34", "user_nickname": "AI"}
@@ -90,7 +90,14 @@ for name in ("host_entry", "host.plugins.watch_dog"):
         lookup.return_value = None
         await check([{"type":"reply","data":{"target_message_id":"42"}}], 0.8, "abort", True)
         msg["message_info"]["group_info"]["group_id"] = "99"
+        await check(ordinary, 0.8, "abort", True)
+        plugin._context_rules = module._engine.compile_context_rules({"context_only": [dict(row, group_id="12")]})
+        await check(ordinary, 0.8, "abort", True)
+        msg["message_info"]["group_info"] = {}
+        await check(ordinary, 0.8, "abort", True)
+        user["user_id"] = "35"
         await check(ordinary, 0.8, "continue", False)
+        user["user_id"] = "34"
         msg["message_info"]["group_info"]["group_id"] = "12"
         async def configure(**overrides):
             await plugin.on_config_update("self", {"context_only":[dict(row, **overrides)]}, "")

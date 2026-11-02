@@ -39,7 +39,7 @@ class PluginSettings(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用消息过滤")
 
 class WatchDogConfig(PluginConfigBase):
-    context_only: list[dict] = Field(default_factory=list, description="按群和发送者控制 Planner 放行概率")
+    context_only: list[dict] = Field(default_factory=list, description="按发送者 QQ 号控制 Planner 放行概率")
     plugin: PluginSettings = Field(default_factory=PluginSettings)
     rules: list[dict] = Field(default_factory=list, description="按顺序匹配的过滤规则")
 
@@ -145,9 +145,7 @@ class WatchDogPlugin(MaiBotPlugin):
     async def _context_action(self, message, kwargs):
         info = message.get("message_info") or message
         user = info.get("user_info") or {}
-        group = info.get("group_info") or {}
-        key = (str(group.get("group_id")), str(user.get("user_id")))
-        rule = self._context_rules.get(key)
+        rule = self._context_rules.get(str(user.get("user_id")))
         if rule is None or message.get("platform") != "qq" or rule.probability == 1:
             return {"action": "continue"}
         try:

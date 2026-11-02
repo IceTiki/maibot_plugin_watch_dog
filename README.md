@@ -46,12 +46,11 @@ enabled = true
 
 ## 按发送者控制 Planner（普通模式）
 
-将以下配置追加到原始 TOML，替换群号和 QQ。
+将以下配置追加到原始 TOML，将示例号码替换为发送者 QQ 号。此名单适用于所有 QQ 群和私聊。升级到 0.2.1 后，旧配置中的 group_id 会被忽略；同一 QQ 出现在多条规则时，按配置顺序取第一条。
 
 ```toml
 
 [[context_only]]
-group_id = "20001"
 user_ids = ["10001", "10002"]
 planner_pass_probability = 0.05
 allow_planner_on_at_bot = true

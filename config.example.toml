@@ -18,7 +18,6 @@ conditions = [{kind = "forward"}]
 
 
 [[context_only]]
-group_id = "20001"
 user_ids = ["10001", "10002"]
 planner_pass_probability = 0.05
 allow_planner_on_at_bot = true

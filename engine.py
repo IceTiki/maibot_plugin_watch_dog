@@ -109,13 +109,12 @@ def compile_context_rules(data):
     for n, row in enumerate(rows, 1):
         if not isinstance(row, dict):
             raise ValueError(f"context_only #{n}: 配置必须为表")
-        group = row.get("group_id")
         users = row.get("user_ids")
         if not isinstance(users, list) or not users or not all(
             isinstance(x, (str, int)) and str(x).isascii() and str(x).isdigit()
-            for x in [group, *users]
+            for x in users
         ):
-            raise ValueError(f"context_only #{n}: 请填写群号和 QQ 号列表")
+            raise ValueError(f"context_only #{n}: 请填写非空的 QQ 号列表")
         probability = row.get("planner_pass_probability", 0.0)
         if type(probability) not in (float, int) or not 0 <= probability <= 1:
             raise ValueError(f"context_only #{n}: 放行概率必须在 0 到 1 之间")
@@ -125,5 +124,5 @@ def compile_context_rules(data):
             raise ValueError(f"context_only #{n}: 例外开关必须是布尔值")
         rule = ContextRule(probability, at, reply)
         for user in users:
-            index.setdefault((str(group), str(user)), rule)
+            index.setdefault(str(user), rule)
     return index if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else {}
