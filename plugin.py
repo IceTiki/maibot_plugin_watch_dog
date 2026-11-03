@@ -39,6 +39,7 @@ class PluginSettings(PluginConfigBase):
     enabled: bool = Field(default=True, description="启用消息过滤")
 
 class WatchDogConfig(PluginConfigBase):
+    group_context_only: list[dict] = Field(default_factory=list, description="按 QQ 群控制全体成员的 Planner 放行概率")
     context_only: list[dict] = Field(default_factory=list, description="按发送者 QQ 号控制 Planner 放行概率")
     plugin: PluginSettings = Field(default_factory=PluginSettings)
     rules: list[dict] = Field(default_factory=list, description="按顺序匹配的过滤规则")
@@ -51,6 +52,7 @@ class WatchDogPlugin(MaiBotPlugin):
         config = self.get_plugin_config_data()
         self._rules = compile_rules(config)
         self._context_rules = _engine.compile_context_rules(config)
+        self._group_rules = _engine.compile_context_rules(config, "group_context_only")
 
     async def on_unload(self):
         for task in self._tasks:
@@ -63,10 +65,11 @@ class WatchDogPlugin(MaiBotPlugin):
         try:
             rules = compile_rules(config_data)
             context_rules = _engine.compile_context_rules(config_data)
+            group_rules = _engine.compile_context_rules(config_data, "group_context_only")
         except (ValueError, KeyError, TypeError) as exc:
             self.ctx.logger.error("Watch Dog 配置无效，保留原规则：%s", str(exc))
             return
-        self._rules, self._context_rules = rules, context_rules
+        self._rules, self._context_rules, self._group_rules = rules, context_rules, group_rules
 
     async def _resolve_stream_id(self, message, kwargs):
         for source in (message, kwargs):
@@ -145,7 +148,10 @@ class WatchDogPlugin(MaiBotPlugin):
     async def _context_action(self, message, kwargs):
         info = message.get("message_info") or message
         user = info.get("user_info") or {}
-        rule = self._context_rules.get(str(user.get("user_id")))
+        group = info.get("group_info") or {}
+        rule = self._group_rules.get(str(group.get("group_id")))
+        if rule is None:
+            rule = self._context_rules.get(str(user.get("user_id")))
         if rule is None or message.get("platform") != "qq" or rule.probability == 1:
             return {"action": "continue"}
         try:

@@ -60,6 +60,7 @@ for name in ("host_entry", "host.plugins.watch_dog"):
             maisaka=types.SimpleNamespace(context=types.SimpleNamespace(append=append)),
             message=types.SimpleNamespace(get_by_id=lookup), logger=Mock())
         row = {"user_ids": ["34"], "planner_pass_probability": 0.05}
+        plugin._group_rules = {}
         plugin._rules = ()
         plugin._context_rules = module._engine.compile_context_rules({"context_only": [row, dict(row, planner_pass_probability=1)]})
         user = {"user_id": "34", "user_nickname": "AI"}
@@ -113,6 +114,24 @@ for name in ("host_entry", "host.plugins.watch_dog"):
         for invalid in [-1, 1.01, float("nan"), True, "0.1"]:
             await configure(planner_pass_probability=invalid)
             assert plugin._context_rules is old
+        cfg = {"group_context_only":[{"group_id":"12","planner_pass_probability":0,
+                 "allow_planner_on_at_bot":True,"allow_planner_on_reply_to_bot":False}],
+               "context_only":[dict(row, planner_pass_probability=1)]}
+        await plugin.on_config_update("self",cfg,"")
+        for seg in (ordinary, quote, [{"type":"at","data":{"target_user_id":"8"}}],
+                    [{"type":"text","data":"@麦麦"}], [{"type":"forward","data":[{"content":at}]}]):
+            await check(seg,0,"abort",True)
+        await check(at,0,"continue",False)
+        await check(quote+at,0,"continue",False)
+        plugin._rules = module.compile_rules({"rules":[{"name":"blocked","conditions":[{"kind":"sender_qq","ids":["34"]}]}]})
+        await check(at,0,"abort",False)
+        plugin._rules = ()
+        user["user_id"] = "35"
+        await check(ordinary,0,"abort",True)
+        for group in ({}, {"group_id":"99"}):
+            msg["message_info"]["group_info"] = group
+            await check(ordinary,0,"continue",False)
+        msg["message_info"]["group_info"] = {"group_id":"12"}
         append.side_effect = RuntimeError("failure")
         await check(ordinary, 0, "abort", True)
         plugin._rules = module.compile_rules({"rules":[{"name":"block","conditions":[{"kind":"text_regex","pattern":"hello"}]}]})

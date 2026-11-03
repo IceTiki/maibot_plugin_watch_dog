@@ -70,3 +70,16 @@ scope = "global"
 reply = ""
 conditions = [{kind = "sender_qq", ids = ["20001"]}]
 ```
+
+## 指定群仅直接 @ 放行
+
+已有屏蔽规则优先；随后按群匹配，再按发送者匹配。只检查外层真实 @ 段，引用自动携带的外层 @ 也算。普通消息仅加入当前上下文。
+
+```toml
+
+[[group_context_only]]
+group_id = "20002"
+planner_pass_probability = 0.0
+allow_planner_on_at_bot = true
+allow_planner_on_reply_to_bot = false
+```

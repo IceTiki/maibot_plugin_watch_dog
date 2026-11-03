@@ -29,3 +29,9 @@ allow_planner_on_reply_to_bot = true
 # scope = "global"
 # reply = ""
 # conditions = [{kind = "sender_qq", ids = ["20001"]}]
+
+[[group_context_only]]
+group_id = "20002"
+planner_pass_probability = 0.0
+allow_planner_on_at_bot = true
+allow_planner_on_reply_to_bot = false

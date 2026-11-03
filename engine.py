@@ -119,28 +119,28 @@ class ContextRule:
     allow_reply: bool
 
 
-def compile_context_rules(data):
+def compile_context_rules(data, section="context_only"):
     index = {}
-    rows = data.get("context_only", [])
+    rows = data.get(section, [])
     if not isinstance(rows, list):
-        raise ValueError("context_only 必须是规则列表")
+        raise ValueError(f"{section} 必须是规则列表")
     for n, row in enumerate(rows, 1):
         if not isinstance(row, dict):
-            raise ValueError(f"context_only #{n}: 配置必须为表")
-        users = row.get("user_ids")
-        if not isinstance(users, list) or not users or not all(
+            raise ValueError(f"{section} #{n}: 配置必须为表")
+        targets = [row.get("group_id")] if section == "group_context_only" else row.get("user_ids")
+        if not isinstance(targets, list) or not targets or not all(
             isinstance(x, (str, int)) and str(x).isascii() and str(x).isdigit()
-            for x in users
+            for x in targets
         ):
-            raise ValueError(f"context_only #{n}: 请填写非空的 QQ 号列表")
+            raise ValueError(f"{section} #{n}: 请检查目标群号或发送者 QQ 号")
         probability = row.get("planner_pass_probability", 0.0)
         if type(probability) not in (float, int) or not 0 <= probability <= 1:
-            raise ValueError(f"context_only #{n}: 放行概率必须在 0 到 1 之间")
+            raise ValueError(f"{section} #{n}: 放行概率必须在 0 到 1 之间")
         at = row.get("allow_planner_on_at_bot", True)
         reply = row.get("allow_planner_on_reply_to_bot", True)
         if type(at) is not bool or type(reply) is not bool:
-            raise ValueError(f"context_only #{n}: 例外开关必须是布尔值")
+            raise ValueError(f"{section} #{n}: 例外开关必须是布尔值")
         rule = ContextRule(probability, at, reply)
-        for user in users:
-            index.setdefault(str(user), rule)
+        for target in targets:
+            index.setdefault(str(target), rule)
     return index if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else {}
