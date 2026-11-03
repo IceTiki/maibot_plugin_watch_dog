@@ -8,6 +8,28 @@ class RulesTest(unittest.TestCase):
         self.assertIsNotNone(first_match(rules,msg))
         msg["group_info"]["group_id"]=2
         self.assertIsNone(first_match(rules,msg))
+    def test_sender_qq(self):
+        sender = {"kind": "sender_qq", "ids": ["33", 44]}
+        group = {"name":"group image", "scope":"groups", "ids":["11"],
+                 "conditions":[sender, {"kind":"image"}]}
+        global_rule = {"name":"all senders", "conditions":[sender]}
+        rules = compile_rules({"rules":[group, global_rule]})
+        info = {"group_info":{"group_id":"11"}, "user_info":{"user_id":44}}
+        msg = {"platform":"qq", "message_info":info, "raw_message":[{"type":"image"}]}
+        self.assertEqual(first_match(rules,msg).name, "group image")
+        msg["raw_message"] = []
+        self.assertEqual(first_match(rules,msg).name, "all senders")
+        info.pop("group_info")
+        self.assertEqual(first_match(rules,msg).name, "all senders")
+        msg["platform"] = "other"
+        self.assertIsNone(first_match(rules,msg))
+        msg["platform"] = "qq"
+        info["user_info"]["user_id"] = "11"
+        self.assertIsNone(first_match(rules,msg))
+        for invalid in (None, [], "44", [True], ["x"]):
+            with self.assertRaises(ValueError):
+                compile_rules({"rules":[{"name":"bad","conditions":[{"kind":"sender_qq","ids":invalid}]}]})
+
     def test_invalid(self):
         for conditions in ([], [{"kind":"text_regex","pattern":"["}]):
             with self.assertRaises(ValueError):

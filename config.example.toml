@@ -22,3 +22,10 @@ user_ids = ["10001", "10002"]
 planner_pass_probability = 0.05
 allow_planner_on_at_bot = true
 allow_planner_on_reply_to_bot = true
+
+# 按发送者完全屏蔽示例，使用时取消注释并替换 QQ 号
+# [[rules]]
+# name = "完全屏蔽指定 QQ"
+# scope = "global"
+# reply = ""
+# conditions = [{kind = "sender_qq", ids = ["20001"]}]

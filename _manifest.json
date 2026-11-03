@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "local.watch-dog",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "name": "Watch Dog",
   "description": "规则消息过滤",
   "author": {

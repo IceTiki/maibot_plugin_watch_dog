@@ -26,6 +26,15 @@ def compile_rules(data):
             raise ValueError(f"{name}: groups requires ids")
         for c in item.get("conditions", []):
             kind = c["kind"]
+            if kind == "sender_qq":
+                senders = c.get("ids")
+                if not isinstance(senders, list) or not senders or not all(
+                    type(x) in (str, int) and str(x).isascii() and str(x).isdigit()
+                    for x in senders
+                ):
+                    raise ValueError(f"{name}: sender_qq requires a non-empty list of QQ IDs")
+                conditions.append((kind, frozenset(map(str, senders))))
+                continue
             if kind not in ("image", "forward", "poke", "text_regex"):
                 raise ValueError(f"{name}: unknown condition")
             try:
@@ -84,12 +93,21 @@ def first_match(rules, message):
     group = (info.get("group_info") or {}).get("group_id")
     user = (info.get("user_info") or {}).get("user_id")
     kinds, texts = inspect_message(message)
+    def matches(condition):
+        kind, value = condition
+        if kind == "sender_qq":
+            platform = message.get("platform") or info.get("platform")
+            return platform == "qq" and str(user) in value
+        if kind == "text_regex":
+            return any(value.search(text) for text in texts)
+        return kind in kinds
+
     for r in rules:
         if r.scope == "groups" and (group is None or str(group) not in r.ids):
             continue
         if r.scope == "private" and (group is not None or (r.ids and str(user) not in r.ids)):
             continue
-        if all(any(pattern.search(t) for t in texts) if kind == "text_regex" else kind in kinds for kind, pattern in r.conditions):
+        if all(matches(condition) for condition in r.conditions):
             return r
     return None
 
