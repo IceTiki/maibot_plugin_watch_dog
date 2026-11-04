@@ -80,11 +80,14 @@ def inspect_message(message):
                     if key in value:
                         walk(value[key], depth + 1)
     walk(message.get("raw_message", message.get("message_segment", [])))
-    event = message.get("event", {})
-    if isinstance(event, dict) and event.get("sub_type", event.get("type")) == "poke":
-        target, bot = event.get("target_id"), event.get("self_id")
-        if target is not None and bot is not None and str(target) == str(bot):
-            kinds.add("poke")
+    info = message.get("message_info") or message
+    notice = info.get("additional_config") or {}
+    payload = notice.get("napcat_notice_payload") or {}
+    event = message.get("event") or {}
+    if (notice.get("napcat_notice_sub_type") == "poke"
+            or isinstance(payload, dict) and payload.get("sub_type") == "poke"
+            or isinstance(event, dict) and event.get("sub_type", event.get("type")) == "poke"):
+        kinds.add("poke")
     return kinds, texts
 
 

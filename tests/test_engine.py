@@ -30,6 +30,16 @@ class RulesTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 compile_rules({"rules":[{"name":"bad","conditions":[{"kind":"sender_qq","ids":invalid}]}]})
 
+    def test_poke_notice(self):
+        rules = compile_rules({"rules":[{"name":"poke","conditions":[{"kind":"poke"}]}]})
+        for target in ("bot", "peer"):
+            payload = {"notice_type":"notify","sub_type":"poke","target_id":target,"self_id":"bot"}
+            for notice in ({"napcat_notice_payload":payload},{"napcat_notice_sub_type":"poke"}):
+                self.assertIsNotNone(first_match(rules, {"message_info":{"additional_config":notice}}))
+            self.assertIsNotNone(first_match(rules, {"event":payload}))
+        self.assertIsNone(first_match(rules, {"raw_message":[{"type":"text","data":"戳一戳"}],
+            "message_info":{"additional_config":{"napcat_notice_sub_type":"lucky_king"}}}))
+
     def test_invalid(self):
         for conditions in ([], [{"kind":"text_regex","pattern":"["}]):
             with self.assertRaises(ValueError):

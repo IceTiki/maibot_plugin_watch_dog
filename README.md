@@ -6,7 +6,7 @@
 
 复制 config.example.toml 的规则到 MaiBot 生成的 config.toml。scope 支持 global、groups、private；ids 为群号或私聊用户号字符串列表，private 留空匹配所有私聊。conditions.kind 支持 image、forward、poke、text_regex；正则需提供 pattern，使用 search 语义。reply 留空静默屏蔽，TOML 多行字符串支持换行。
 
-配置修改自动重载；无效更新保留旧规则。转发仅递归检查适配器已提供的正文，不下载缺失节点，不进行 OCR。poke 要求 event 包含 poke 类型、target_id 和 self_id，且目标为机器人。适配器缺少这些字段时不能识别。递归最大深度 64。
+配置修改自动重载；无效更新保留旧规则。转发仅递归检查适配器已提供的正文，不下载缺失节点，不进行 OCR。从 0.3.1 起，poke 匹配适配器上报的所有戳一戳，包括群友互戳、戳麦麦及私聊戳一戳。支持 NapCat 经 SnowLuma 适配器传递的结构化通知以及原有 event 格式。递归最大深度 64。
 
 ## Docker 安装
 
