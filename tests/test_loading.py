@@ -132,6 +132,22 @@ for name in ("host_entry", "host.plugins.watch_dog"):
             msg["message_info"]["group_info"] = group
             await check(ordinary,0,"continue",False)
         msg["message_info"]["group_info"] = {"group_id":"12"}
+        cfg["rules"] = [{"name":"block peers","conditions":[{"kind":"poke_except_bot"}]}]
+        cfg["group_context_only"][0]["allow_planner_on_poke_bot"] = True
+        await plugin.on_config_update("self",cfg,"")
+        payload = {"sub_type":"poke","self_id":9,"target_id":"9"}
+        msg["message_info"]["additional_config"] = {"napcat_notice_payload":payload}
+        await check(ordinary,0,"continue",False)
+        payload["target_id"] = 8
+        await check(ordinary,0,"abort",False)
+        del payload["target_id"]
+        await check(ordinary,0,"abort",False)
+        payload["target_id"] = 9
+        cfg["rules"].insert(0, {"name":"blocked","conditions":[{"kind":"sender_qq","ids":["35"]}]})
+        await plugin.on_config_update("self",cfg,"")
+        await check(ordinary,0,"abort",False)
+        del msg["message_info"]["additional_config"]
+        plugin._rules = ()
         append.side_effect = RuntimeError("failure")
         await check(ordinary, 0, "abort", True)
         plugin._rules = module.compile_rules({"rules":[{"name":"block","conditions":[{"kind":"text_regex","pattern":"hello"}]}]})

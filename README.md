@@ -83,3 +83,5 @@ planner_pass_probability = 0.0
 allow_planner_on_at_bot = true
 allow_planner_on_reply_to_bot = false
 ```
+
+0.3.2 支持 `poke_except_bot`，屏蔽戳向其他人或目标无法确认的通知。原有 `poke` 仍匹配所有戳一戳。在上下文策略中设置 `allow_planner_on_poke_bot = true` 可让戳麦麦的通知交回原生流程，默认关闭。所有硬屏蔽规则优先。

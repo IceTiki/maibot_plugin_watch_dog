@@ -114,6 +114,8 @@ class WatchDogPlugin(MaiBotPlugin):
             self.ctx.logger.warning("Watch Dog 会话解析或自动回复失败（%s），消息保持屏蔽", type(exc).__name__)
 
     async def _direct_interaction(self, rule, message, kwargs):
+        if rule.allow_poke and _engine.poke_kind(message) == "poke_bot":
+            return True
         segments = message.get("raw_message") or []
         targets = []
         replies = []

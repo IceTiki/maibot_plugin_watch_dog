@@ -35,7 +35,7 @@ def compile_rules(data):
                     raise ValueError(f"{name}: sender_qq requires a non-empty list of QQ IDs")
                 conditions.append((kind, frozenset(map(str, senders))))
                 continue
-            if kind not in ("image", "forward", "poke", "text_regex"):
+            if kind not in ("image", "forward", "poke", "poke_except_bot", "text_regex"):
                 raise ValueError(f"{name}: unknown condition")
             try:
                 pattern = re.compile(c["pattern"]) if kind == "text_regex" else None
@@ -46,6 +46,24 @@ def compile_rules(data):
             raise ValueError(f"{name}: empty conditions")
         result.append(Rule(name, scope, ids, tuple(conditions), item.get("reply", "")))
     return tuple(result) if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else ()
+
+
+def poke_kind(message):
+    info = message.get("message_info") or message
+    notice = info.get("additional_config") or {}
+    payload = notice.get("napcat_notice_payload")
+    event = message.get("event")
+    if notice.get("napcat_notice_sub_type") == "poke" or (
+        isinstance(payload, dict) and payload.get("sub_type") == "poke"
+    ):
+        record = payload if isinstance(payload, dict) else {}
+    elif isinstance(event, dict) and event.get("sub_type", event.get("type")) == "poke":
+        record = event
+    else:
+        return None
+    target = str(record.get("target_id") or "")
+    account = str(record.get("self_id") or message.get("account_id") or "")
+    return "poke_bot" if target.isascii() and target.isdigit() and target == account else "poke_except_bot"
 
 
 def inspect_message(message):
@@ -80,14 +98,9 @@ def inspect_message(message):
                     if key in value:
                         walk(value[key], depth + 1)
     walk(message.get("raw_message", message.get("message_segment", [])))
-    info = message.get("message_info") or message
-    notice = info.get("additional_config") or {}
-    payload = notice.get("napcat_notice_payload") or {}
-    event = message.get("event") or {}
-    if (notice.get("napcat_notice_sub_type") == "poke"
-            or isinstance(payload, dict) and payload.get("sub_type") == "poke"
-            or isinstance(event, dict) and event.get("sub_type", event.get("type")) == "poke"):
-        kinds.add("poke")
+    poke = poke_kind(message)
+    if poke:
+        kinds.update(("poke", poke))
     return kinds, texts
 
 
@@ -120,6 +133,7 @@ class ContextRule:
     probability: float
     allow_at: bool
     allow_reply: bool
+    allow_poke: bool
 
 
 def compile_context_rules(data, section="context_only"):
@@ -141,9 +155,10 @@ def compile_context_rules(data, section="context_only"):
             raise ValueError(f"{section} #{n}: 放行概率必须在 0 到 1 之间")
         at = row.get("allow_planner_on_at_bot", True)
         reply = row.get("allow_planner_on_reply_to_bot", True)
-        if type(at) is not bool or type(reply) is not bool:
+        poke = row.get("allow_planner_on_poke_bot", False)
+        if any(type(flag) is not bool for flag in (at, reply, poke)):
             raise ValueError(f"{section} #{n}: 例外开关必须是布尔值")
-        rule = ContextRule(probability, at, reply)
+        rule = ContextRule(probability, at, reply, poke)
         for target in targets:
             index.setdefault(str(target), rule)
     return index if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else {}

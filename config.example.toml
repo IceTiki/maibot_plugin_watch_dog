@@ -35,3 +35,10 @@ group_id = "20002"
 planner_pass_probability = 0.0
 allow_planner_on_at_bot = true
 allow_planner_on_reply_to_bot = false
+
+# 在需要放行戳麦麦的 group_context_only 条目内设置 allow_planner_on_poke_bot = true
+# 屏蔽其他戳一戳的全局规则示例
+# [[rules]]
+# name = "屏蔽其他戳一戳"
+# scope = "global"
+# conditions = [{ kind = "poke_except_bot" }]
