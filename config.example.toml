@@ -1,44 +1,51 @@
+# 示例配置：请把现有屏蔽规则放在留步与上下文规则之前。
 [plugin]
-config_version = "0.1.1"
+config_version = "0.4.0"
 enabled = true
 
-[[rules]]
-name = "指定群图文过滤"
-enabled = true
-scope = "groups"
-ids = ["20001"]
-reply = "这类消息暂不处理。"
-conditions = [{kind = "image"}, {kind = "text_regex", pattern = "广告|推广"}]
+[follow_up]
+window_seconds = 60
+max_active_seconds = 300
+
+# 从上到下，第一条完整命中后结束。无规则命中时走原生流程。
+# group：["*"] 含群聊及私聊；["private"] 仅私聊；也可列多个群号。
+# user：["*"] 表示全部，或列多个 QQ。group/user 列表内部任意匹配。
+# condition：全部满足；[] 表示无额外限制。
+# kind：image / forward / poke / poke_except_bot / text_regex / interaction。
+# text_regex 需 pattern，按 search 匹配。转发节点分别匹配，不跨节点拼接。
+# interaction.types 任一匹配：
+# nickname / at_bot / reply_to_bot / poke_bot / message。
+# 有效窗口仅使 follow_up 规则的 interaction 对普通消息成立。
+# action.kind：block / follow_up / context_only / native。
+# block 可指定 reply，空或省略为静默屏蔽。
+# follow_up 可指定 window_seconds/max_active_seconds；省略或 0 继承全局。
+# 每条规则可指定 enabled，默认 true。WebUI 新增行默认关闭。
 
 [[rules]]
-name = "全局转发过滤"
-scope = "global"
-reply = ""
-conditions = [{kind = "forward"}]
+name = "示例账号屏蔽（填写后启用）"
+enabled = false
+group = ["*"]
+user = ["20001"]
+condition = []
+action = { kind = "block", reply = "" }
 
+[[rules]]
+name = "屏蔽其他戳一戳"
+group = ["*"]
+user = ["*"]
+condition = [{ kind = "poke_except_bot" }]
+action = { kind = "block" }
 
-[[context_only]]
-user_ids = ["10001", "10002"]
-planner_pass_probability = 0.05
-allow_planner_on_at_bot = true
-allow_planner_on_reply_to_bot = true
+[[rules]]
+name = "互动开窗及连续追问"
+group = ["*"]
+user = ["*"]
+condition = [{ kind = "interaction", types = ["nickname", "at_bot", "reply_to_bot"] }]
+action = { kind = "follow_up" }
 
-# 按发送者完全屏蔽示例，使用时取消注释并替换 QQ 号
-# [[rules]]
-# name = "完全屏蔽指定 QQ"
-# scope = "global"
-# reply = ""
-# conditions = [{kind = "sender_qq", ids = ["20001"]}]
-
-[[group_context_only]]
-group_id = "20002"
-planner_pass_probability = 0.0
-allow_planner_on_at_bot = true
-allow_planner_on_reply_to_bot = false
-
-# 在需要放行戳麦麦的 group_context_only 条目内设置 allow_planner_on_poke_bot = true
-# 屏蔽其他戳一戳的全局规则示例
-# [[rules]]
-# name = "屏蔽其他戳一戳"
-# scope = "global"
-# conditions = [{ kind = "poke_except_bot" }]
+[[rules]]
+name = "其余消息只入上下文"
+group = ["*"]
+user = ["*"]
+condition = []
+action = { kind = "context_only" }

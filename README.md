@@ -1,87 +1,68 @@
-# Watch Dog
+# Watch Dog v0.4.0
 
-新版 MaiBot SDK 消息过滤插件。规则间为或，子条件间为与，首条命中即屏蔽。默认规则为空。
+MaiBot SDK 插件。所有规则按配置顺序检查，第一条完整命中后执行并结束。没有动作类型的固定排序。
 
 ## 配置
 
-复制 config.example.toml 的规则到 MaiBot 生成的 config.toml。scope 支持 global、groups、private；ids 为群号或私聊用户号字符串列表，private 留空匹配所有私聊。conditions.kind 支持 image、forward、poke、text_regex；正则需提供 pattern，使用 search 语义。reply 留空静默屏蔽，TOML 多行字符串支持换行。
+完整参数见 config.example.toml。每条规则包含 name、group、user、condition、action，可选 enabled。
 
-配置修改自动重载；无效更新保留旧规则。转发仅递归检查适配器已提供的正文，不下载缺失节点，不进行 OCR。从 0.3.1 起，poke 匹配适配器上报的所有戳一戳，包括群友互戳、戳麦麦及私聊戳一戳。支持 NapCat 经 SnowLuma 适配器传递的结构化通知以及原有 event 格式。递归最大深度 64。
+- group 的 * 包含群聊与私聊，private 只匹配私聊，其余项为群号。
+- user 为发送者 QQ 列表，* 匹配所有发送者。ID 支持数字字符串或整数。
+- 群、用户和所有额外条件同时满足。condition=[] 允许只按范围匹配。
+- action.kind 支持 block、follow_up、context_only、native。
+- block 中的 reply 为固定回复文本，支持换行。发送失败仍中止消息。
+- context_only 追加一次当前上下文后中止。追加失败记录消息 ID 并保持中止。
+- native 直接交回主程序。follow_up 标记为提及麦麦，最终回复由主程序决定。
+- 本版没有概率抽样；旧 context_only、group_context_only 和概率字段需要显式迁移。
+- 空规则列表或插件关闭时所有消息走原生流程。
+- 类型、正则、空 ID 列表及非法窗口设置会在配置校验时拒绝；无效热更新保留旧规则。
 
-## Docker 安装
+条件包括 image、forward、poke、poke_except_bot、text_regex、interaction。结构化 NapCat 通知通过 SnowLuma 适配器读取；poke_except_bot 匹配戳别人或缺失目标的戳一戳。转发仅检查适配器提供的正文，最多递归 64 层。正则预编译，使用 search；相邻文本拼接，各转发节点分别匹配；媒体说明与引用原文不作为正文。
 
-将本目录复制到服务器 /path/to/maibot/data/MaiMBot/plugins/maimai_plugin_watch_dog，对应容器 /MaiMBot/plugins/maimai_plugin_watch_dog。安装 SDK 依赖后，在 /path/to/maibot 执行 docker compose restart core。查看 docker logs --tail 100 maim-bot-core 确认加载。
+互动类型为 nickname、at_bot、reply_to_bot、poke_bot、message，列表内部任一命中。昵称读取 bot.nickname 和 bot.alias_names，配置广播时失效缓存，最长 30 秒刷新。只检查本条原始文本。真实外层 at 核对目标 QQ，引用核对原作者，查不到作者不命中。通知及 bot 自身消息不作为普通追问。
 
-先在测试群配置规则，分别发送命中与不命中的消息，确认命中消息不触发识图、命令或聊天上下文，正常消息正常处理。验证静默回复、回复失败、嵌套转发和戳一戳。已有上下文不自动清理。其他提前执行的内置 Hook 不受本插件控制。
+## 留步
 
-## 开发验证
+默认窗口 60 秒，本轮上限 300 秒；单条 action 可覆盖，0 或省略继承全局。窗口按规则、机器人账号、会话、发言人隔离。
 
+主动互动命中才开窗或续期。已有窗口可以满足当前 follow_up 规则的 interaction 条件，但其他条件仍需满足。普通追问仅更新活跃时间。麦麦成功发言为同会话窗口有效且最近一个窗口时长内发言的人续期，受本轮上限约束。到期后重新互动可以再开窗。
+
+有效配置更新、停用、卸载或重启清空窗口。前置 Hook 决定路径，后置 Hook 标记 is_mentioned。相同路由和消息 ID 在 5 分钟内避免重复追加、固定回复及窗口续期，最近记录上限 10000。消息内容不写入插件日志。
+
+示例及本次部署策略将所有群和私聊统一处理。昵称、@、引用开窗；戳麦麦只入上下文，戳别人屏蔽。窗口内发给其他人的普通发言同样被视为追问。上下文追加依赖主程序运行时历史，重启持久性取决于宿主。
+
+## WebUI
+
+规则和条件使用强类型配置模型，提供中文标签、范围列表、类型下拉与互动多选，支持拖拽规则排序。
+
+当前 MaiBot WebUI 不支持规则内部单个 action 对象的表单编辑，经用户选择，action 在原始 TOML 编辑。插件在可视化 Schema 中隐藏 action，避免显示 [object Object]；编辑其他字段保留已有动作。新增规则默认关闭并默认 native，需在原始 TOML 设置动作后再启用。窗口覆盖的 0 表示继承默认值。
+
+## 安装与升级
+
+Docker 主机插件目录为 /path/to/maibot/data/MaiMBot/plugins/local_watch-dog，挂载到 /MaiMBot/plugins/local_watch-dog。release ZIP 根目录直接解压到该目录，勿嵌套额外目录。
+
+升级前备份插件和配置。v0.3 配置显式迁移命令为：
+
+```sh
+python3 migrate.py old-config.toml new-config.toml
+```
+
+该迁移器保留旧过滤规则顺序、名单、正则和固定回复，删除旧概率/群策略，新增全局互动留步和 context_only 两条尾规则。迁移是本次用户选定的全局策略调整，非所有旧部署的等价升级。迁移成功后用新配置替换运行时 config.toml，停用独立 gsskk.followup-window，重启：
+
+```sh
+cd /path/to/maibot
+docker compose restart core
+docker logs --since 2m maim-bot-core
+```
+
+检查 Watch Dog v0.4.0 加载、10 条规则、独立留步停用。实群与私聊分别检查普通消息只入上下文、昵称/@/引用开窗、同人追问放行、其他人不借窗、窗口到期。后续真实互动应能读取先前追加的内容。自动化模拟不能替代真实 QQ 事件验收。
+
+## 验证
+
+```sh
 python -m unittest discover -s tests -v
-
-尚未在实际服务器验收。插件依赖适配器的结构化消息；缺少会话 ID 时仍屏蔽，但无法自动回复。
-
-## 从 0.1.0 修复配置
-
-更新到 0.1.1 后，在原始 TOML 编辑器中补上以下配置节并保存。已有的 `[[rules]]` 保持顶层，不要改成 `[[plugin.rules]]`。如果已有顶层 `enabled`，将它移动到 `[plugin]` 下，避免两处开关。
-
-```toml
-[plugin]
-config_version = "0.1.1"
-enabled = true
 ```
 
-配置节可放在现有规则之前。空规则的完整初始配置如下（`rules` 必须在 `[plugin]` 之前）：
+本地缺少 SDK 时测试只替代宿主外壳，部署前还需在实际 MaiBot SDK 中运行全部测试和配置 Schema 检查。
 
-```toml
-rules = []
-
-[plugin]
-config_version = "0.1.1"
-enabled = true
-```
-
-## 0.1.2
-
-修复预处理消息缺少会话 ID 时无法自动回复的问题；使用平台和群号/私聊用户号打开会话，保留已提供的账号路由。必须一起更新 Manifest（新增 chat.open_session 能力）并重载插件。规则配置无需修改。会话解析或发送失败仍然拦截消息。
-
-## 按发送者控制 Planner（普通模式）
-
-将以下配置追加到原始 TOML，将示例号码替换为发送者 QQ 号。此名单适用于所有 QQ 群和私聊。升级到 0.2.1 后，旧配置中的 group_id 会被忽略；同一 QQ 出现在多条规则时，按配置顺序取第一条。
-
-```toml
-
-[[context_only]]
-user_ids = ["10001", "10002"]
-planner_pass_probability = 0.05
-allow_planner_on_at_bot = true
-allow_planner_on_reply_to_bot = true
-```
-
-默认概率为 0；1 表示全部放行。两个例外默认开启，关闭后按普通概率抽样。直接 @ 和引用只看外层真实消息段，自动附带的 @ 也计入。无法核对引用作者时按普通概率处理。已有屏蔽规则优先，名单重叠取第一条。未放行的消息加入麦麦当前会话上下文，不触发 Planner；不保证进入 WebUI 历史或重启后保留。追加失败会记录消息 ID 并保持拦截。
-
-## 按发送者完全屏蔽（0.2.2）
-
-将示例 QQ 替换为目标账号，放在需要优先拦截的规则之前。顶层 ids 用于限定会话，条件中的 ids 匹配原始发送者。命中后不会进入 context_only 或 Planner。
-
-```toml
-[[rules]]
-name = "完全屏蔽指定 QQ"
-scope = "global"
-reply = ""
-conditions = [{kind = "sender_qq", ids = ["20001"]}]
-```
-
-## 指定群仅直接 @ 放行
-
-已有屏蔽规则优先；随后按群匹配，再按发送者匹配。只检查外层真实 @ 段，引用自动携带的外层 @ 也算。普通消息仅加入当前上下文。
-
-```toml
-
-[[group_context_only]]
-group_id = "20002"
-planner_pass_probability = 0.0
-allow_planner_on_at_bot = true
-allow_planner_on_reply_to_bot = false
-```
-
-0.3.2 支持 `poke_except_bot`，屏蔽戳向其他人或目标无法确认的通知。原有 `poke` 仍匹配所有戳一戳。在上下文策略中设置 `allow_planner_on_poke_bot = true` 可让戳麦麦的通知交回原生流程，默认关闭。所有硬屏蔽规则优先。
+窗口续期行为参考 gsskk/maibot-plugin-followup，许可证见 LICENSE.followup。

@@ -1,165 +1,189 @@
-"""Reproduce the host loading an entrypoint from outside the plugin directory."""
-import subprocess
-import sys
-import tempfile
+from copy import deepcopy
+from support import config, module, rule, standard
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+import asyncio
 import unittest
-from pathlib import Path
 
 
-class LoadingTests(unittest.TestCase):
-    def test_file_entrypoint_without_plugin_on_search_path(self):
-        plugin = Path(__file__).resolve().parents[1] / "plugin.py"
-        script = r"""
-import importlib.util
-import sys
-import types
-sdk = types.ModuleType("maibot_sdk")
-sdk.MaiBotPlugin = type("MaiBotPlugin", (), {})
-sdk.PluginConfigBase = type("PluginConfigBase", (), {})
-sdk.Field = lambda **kwargs: None
-sdk.HookHandler = lambda *args, **kwargs: lambda func: func
-sdk_types = types.ModuleType("maibot_sdk.types")
-sdk_types.HookMode = types.SimpleNamespace(BLOCKING="blocking")
-sdk_types.HookOrder = types.SimpleNamespace(EARLY="early")
-sys.modules["maibot_sdk"] = sdk
-sys.modules["maibot_sdk.types"] = sdk_types
-# An unrelated global engine must never satisfy the sibling import.
-sys.modules["engine"] = types.ModuleType("engine")
-for name in ("host_entry", "host.plugins.watch_dog"):
-    spec = importlib.util.spec_from_file_location(name, sys.argv[1])
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.create_plugin().__class__ is module.WatchDogPlugin
-    import asyncio
-    from unittest.mock import AsyncMock, Mock
-    async def verify_reply():
-        plugin = module.create_plugin()
-        plugin.ctx = types.SimpleNamespace(chat=types.SimpleNamespace(open_session=AsyncMock(return_value={"stream_id":"resolved"})), send=types.SimpleNamespace(text=AsyncMock(return_value=True)), logger=Mock())
-        plugin._tasks = set()
-        plugin._rules = module.compile_rules({"rules":[{"name":"sl","reply":"NOT SNOWLUME! ","conditions":[{"kind":"text_regex","pattern":"^#sl$"}]}]})
-        message = {"platform":"qq","group_info":{"group_id":"123"},"additional_config":{"platform_io_account_id":"bot","scope":"gateway"},"raw_message":[{"type":"text","data":"#sl"}]}
-        assert await plugin.filter_message(message=message) == {"action":"abort"}
-        await asyncio.gather(*plugin._tasks)
-        plugin.ctx.chat.open_session.assert_awaited_once_with(platform="qq",chat_type="group",group_id="123",account_id="bot",scope="gateway")
-        plugin.ctx.send.text.assert_awaited_once_with("NOT SNOWLUME! ","resolved")
-        plugin.ctx.chat.open_session.reset_mock()
-        await plugin._reply("x", {"session_id":"known"}, {})
-        plugin.ctx.chat.open_session.assert_not_awaited()
-        await plugin._reply("x", {"message_info":{"platform":"qq","user_info":{"user_id":"456"}}}, {})
-        plugin.ctx.chat.open_session.assert_awaited_once_with(platform="qq",chat_type="private",user_id="456")
-        plugin.ctx.chat.open_session.side_effect = RuntimeError("failed")
-        assert await plugin.filter_message(message=message) == {"action":"abort"}
-        await asyncio.gather(*plugin._tasks)
-        plugin.ctx.logger.warning.assert_called_once()
-    async def verify_context():
-        from unittest.mock import patch
-        plugin = module.create_plugin()
-        append = AsyncMock(return_value={"success": True})
-        lookup = AsyncMock(return_value={"message_info": {"user_info": {"user_id": "9"}}})
-        plugin.ctx = types.SimpleNamespace(
-            maisaka=types.SimpleNamespace(context=types.SimpleNamespace(append=append)),
-            message=types.SimpleNamespace(get_by_id=lookup), logger=Mock())
-        row = {"user_ids": ["34"], "planner_pass_probability": 0.05}
-        plugin._group_rules = {}
-        plugin._rules = ()
-        plugin._context_rules = module._engine.compile_context_rules({"context_only": [row, dict(row, planner_pass_probability=1)]})
-        user = {"user_id": "34", "user_nickname": "AI"}
-        msg = {"platform": "qq", "account_id": "9", "message_id": "123", "session_id": "s",
-               "message_info": {"group_info": {"group_id": "12"}, "user_info": user}}
-        async def check(segments, sample, expected, appended):
-            append.reset_mock()
-            msg["raw_message"] = segments
-            with patch.object(module.random, "random", return_value=sample) as draw:
-                result = await plugin.filter_message(message=msg)
-                assert draw.call_count <= 1
-            assert result["action"] == expected, result
-            assert append.await_count == int(appended)
-            if appended:
-                assert append.await_args.args == ("s", segments)
-                assert append.await_args.kwargs["user_info"] == user
-                assert append.await_args.kwargs["message_id"] == "123"
-                assert append.await_args.kwargs["replyable"] is True
-        ordinary = [{"type": "text", "data": "hello"}]
-        at = [{"type": "at", "data": {"target_user_id": "9"}}]
-        quote = [{"type": "reply", "data": {"target_message_sender_id": "9"}}]
-        await check(ordinary, 0.049, "continue", False)
-        await check(ordinary, 0.05, "abort", True)
-        await check(at, 0.8, "continue", False)
-        await check(quote, 0.8, "continue", False)
-        await check([{"type":"reply","data":{"target_message_id":"42"}}], 0.8, "continue", False)
-        lookup.assert_awaited_once_with("42", stream_id="s")
-        lookup.return_value = None
-        await check([{"type":"reply","data":{"target_message_id":"42"}}], 0.8, "abort", True)
-        msg["message_info"]["group_info"]["group_id"] = "99"
-        await check(ordinary, 0.8, "abort", True)
-        plugin._context_rules = module._engine.compile_context_rules({"context_only": [dict(row, group_id="12")]})
-        await check(ordinary, 0.8, "abort", True)
-        msg["message_info"]["group_info"] = {}
-        await check(ordinary, 0.8, "abort", True)
-        user["user_id"] = "35"
-        await check(ordinary, 0.8, "continue", False)
-        user["user_id"] = "34"
-        msg["message_info"]["group_info"]["group_id"] = "12"
-        async def configure(**overrides):
-            await plugin.on_config_update("self", {"context_only":[dict(row, **overrides)]}, "")
-        await configure(planner_pass_probability=1)
-        await check(ordinary, 0.99, "continue", False)
-        await configure(planner_pass_probability=0, allow_planner_on_at_bot=False)
-        await check(at, 0, "abort", True)
-        await check(at+quote, 0.99, "continue", False)
-        await configure(planner_pass_probability=0, allow_planner_on_reply_to_bot=False)
-        await check(quote, 0, "abort", True)
-        await check(at+quote, 0.99, "continue", False)
-        old = plugin._context_rules
-        for invalid in [-1, 1.01, float("nan"), True, "0.1"]:
-            await configure(planner_pass_probability=invalid)
-            assert plugin._context_rules is old
-        cfg = {"group_context_only":[{"group_id":"12","planner_pass_probability":0,
-                 "allow_planner_on_at_bot":True,"allow_planner_on_reply_to_bot":False}],
-               "context_only":[dict(row, planner_pass_probability=1)]}
-        await plugin.on_config_update("self",cfg,"")
-        for seg in (ordinary, quote, [{"type":"at","data":{"target_user_id":"8"}}],
-                    [{"type":"text","data":"@麦麦"}], [{"type":"forward","data":[{"content":at}]}]):
-            await check(seg,0,"abort",True)
-        await check(at,0,"continue",False)
-        await check(quote+at,0,"continue",False)
-        plugin._rules = module.compile_rules({"rules":[{"name":"blocked","conditions":[{"kind":"sender_qq","ids":["34"]}]}]})
-        await check(at,0,"abort",False)
-        plugin._rules = ()
-        user["user_id"] = "35"
-        await check(ordinary,0,"abort",True)
-        for group in ({}, {"group_id":"99"}):
-            msg["message_info"]["group_info"] = group
-            await check(ordinary,0,"continue",False)
-        msg["message_info"]["group_info"] = {"group_id":"12"}
-        cfg["rules"] = [{"name":"block peers","conditions":[{"kind":"poke_except_bot"}]}]
-        cfg["group_context_only"][0]["allow_planner_on_poke_bot"] = True
-        await plugin.on_config_update("self",cfg,"")
-        payload = {"sub_type":"poke","self_id":9,"target_id":"9"}
-        msg["message_info"]["additional_config"] = {"napcat_notice_payload":payload}
-        await check(ordinary,0,"continue",False)
-        payload["target_id"] = 8
-        await check(ordinary,0,"abort",False)
-        del payload["target_id"]
-        await check(ordinary,0,"abort",False)
-        payload["target_id"] = 9
-        cfg["rules"].insert(0, {"name":"blocked","conditions":[{"kind":"sender_qq","ids":["35"]}]})
-        await plugin.on_config_update("self",cfg,"")
-        await check(ordinary,0,"abort",False)
-        del msg["message_info"]["additional_config"]
-        plugin._rules = ()
-        append.side_effect = RuntimeError("failure")
-        await check(ordinary, 0, "abort", True)
-        plugin._rules = module.compile_rules({"rules":[{"name":"block","conditions":[{"kind":"text_regex","pattern":"hello"}]}]})
-        await check(ordinary, 0, "abort", False)
-    asyncio.run(verify_context())
-    asyncio.run(verify_reply())
-    rules = module.compile_rules({"rules": [{"name": "test", "conditions": [{"kind": "image"}]}]})
-    assert module.first_match(rules, {"raw_message": [{"type": "image", "data": "x"}]}).name == "test"
-"""
-        with tempfile.TemporaryDirectory() as directory:
-            result = subprocess.run(
-                [sys.executable, "-I", "-c", script, str(plugin)],
-                cwd=directory, capture_output=True, text=True,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
+class HookTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.plugin = module.create_plugin()
+        self.append = AsyncMock(return_value={"success": True})
+        self.send = AsyncMock(return_value=True)
+        self.lookup = AsyncMock(return_value={"message_info": {"user_info": {"user_id": "9"}}})
+        async def get(key, default=None):
+            return {"bot.nickname": "麦麦", "bot.alias_names": ["小麦"], "bot.qq_account": "9"}.get(key, default)
+        self.plugin._ctx = SimpleNamespace(
+            logger=Mock(), config=SimpleNamespace(get=AsyncMock(side_effect=get)),
+            chat=SimpleNamespace(open_session=AsyncMock(return_value={"session_id": "s"})),
+            message=SimpleNamespace(get_by_id=self.lookup), send=SimpleNamespace(text=self.send),
+            maisaka=SimpleNamespace(context=SimpleNamespace(append=self.append)))
+        self.plugin.set_plugin_config(standard())
+        await self.plugin.on_load()
+        self.counter = 0
+
+    async def asyncTearDown(self):
+        await self.plugin.on_unload()
+
+    def message(self, segments=None, group="12", user="34", **extra):
+        self.counter += 1
+        info = {"user_info": {"user_id": user, "user_nickname": "test"}}
+        if group is not None:
+            info["group_info"] = {"group_id": group}
+        return {"platform": "qq", "account_id": "9", "message_id": str(self.counter),
+                "session_id": "s" + str(group), "message_info": info,
+                "raw_message": segments or [{"type": "text", "data": "hello"}], **extra}
+
+    async def check(self, msg, expected, appended=False, marked=False):
+        before = self.append.await_count
+        result = await self.plugin.filter_message(message=msg)
+        self.assertEqual(result["action"], expected)
+        self.assertEqual(self.append.await_count - before, int(appended))
+        after = await self.plugin.mark_followup(message=msg)
+        self.assertEqual(bool(after.get("modified_kwargs", {}).get("message", {}).get("is_mentioned")), marked)
+
+    async def configure(self, data):
+        await self.plugin.on_config_update("self", data, "0.4.0")
+
+    async def test_group_private_nickname_and_at_windows(self):
+        for group in ["12", "20001", None]:
+            await self.check(self.message(group=group), "abort", appended=True)
+            await self.check(self.message([{"type": "at", "data": {"target_user_id": "9"}}], group=group),
+                             "continue", marked=True)
+            await self.check(self.message(group=group), "continue", marked=True)
+            await self.check(self.message(group=group, user="35"), "abort", appended=True)
+        await self.check(self.message([{"type": "text", "data": "小麦你好"}], group="new"), "continue", marked=True)
+
+    async def test_first_complete_match_no_action_priority(self):
+        msg = self.message([{"type": "at", "data": {"target_user_id": "9"}}])
+        await self.configure(config([rule("context_only"), *standard()["rules"]]))
+        await self.check(msg, "abort", appended=True)
+        await self.configure(config([rule("native"), rule("block")]))
+        await self.check(self.message(), "continue")
+        await self.configure(config([rule("block", user=["34"]), *standard()["rules"]]))
+        await self.check(self.message([{"type": "at", "data": {"target_user_id": "9"}}]), "abort")
+        self.assertEqual(self.plugin._windows.windows, {})
+
+    async def test_quote_detection_and_failure(self):
+        await self.check(self.message([{"type": "reply", "data": {"target_message_sender_id": "9"}}]),
+                         "continue", marked=True)
+        await self.configure(standard())
+        await self.check(self.message([{"type": "reply", "data": {"target_message_id": "42"}}]),
+                         "continue", marked=True)
+        self.lookup.assert_awaited_once()
+        await self.configure(standard())
+        self.lookup.side_effect = TimeoutError()
+        await self.check(self.message([{"type": "reply", "data": {"target_message_id": "43"}}]), "abort", appended=True)
+        await self.check(self.message([{"type": "at", "data": {"target_user_id": "8"}}]), "abort", appended=True)
+
+    async def test_no_nested_or_notice_interaction(self):
+        for segments in [
+            [{"type": "forward", "data": [{"type": "at", "data": {"target_user_id": "9"}}]}],
+            [{"type": "reply", "data": {"target_message_sender_id": "8", "text": "麦麦"}}],
+            [{"type": "image", "data": {"description": "麦麦"}}],
+        ]:
+            await self.check(self.message(segments), "abort", appended=True)
+        await self.check(self.message([{"type": "text", "data": "麦麦"}]), "continue", marked=True)
+        msg = self.message(is_notify=True)
+        msg["message_info"]["additional_config"] = {"napcat_notice_payload":
+            {"sub_type": "poke", "target_id": 9, "self_id": 9}}
+        await self.check(msg, "abort", appended=True)
+        await self.configure(config([rule("block", [{"kind": "poke_except_bot"}]), *standard()["rules"]]))
+        msg["message_info"]["additional_config"]["napcat_notice_payload"]["target_id"] = 8
+        await self.check(msg, "abort")
+
+    async def test_failed_context_and_duplicate_message(self):
+        msg = self.message()
+        self.append.side_effect = RuntimeError("failed")
+        await self.check(msg, "abort", appended=True)
+        await self.check(msg, "abort")
+        self.append.side_effect = None
+        msg = self.message()
+        await asyncio.gather(self.plugin.filter_message(message=msg), self.plugin.filter_message(message=msg))
+        self.assertEqual(self.append.await_count, 2)
+
+    async def test_reply_once_even_when_send_fails(self):
+        await self.configure(config([rule("block", action={"kind": "block", "reply": "fixed"})]))
+        self.send.side_effect = RuntimeError("failed")
+        msg = self.message()
+        await self.check(msg, "abort")
+        await self.check(msg, "abort")
+        await asyncio.gather(*self.plugin._tasks)
+        self.send.assert_awaited_once()
+
+    async def test_disabled_and_invalid_update(self):
+        await self.check(self.message([{"type": "text", "data": "麦麦"}]), "continue", marked=True)
+        rules = self.plugin._rules
+        invalid = standard()
+        invalid["rules"][0]["condition"][0]["types"] = ["unknown"]
+        await self.configure(invalid)
+        self.assertIs(self.plugin._rules, rules)
+        self.assertTrue(self.plugin._windows.windows)
+        valid = standard()
+        valid["plugin"]["enabled"] = False
+        await self.configure(valid)
+        await self.check(self.message(), "continue")
+        self.assertFalse(self.plugin._windows.windows)
+
+    async def test_static_condition_still_required_in_window(self):
+        data = standard()
+        data["rules"][0]["condition"].append({"kind": "image"})
+        await self.configure(data)
+        await self.check(self.message([{"type": "text", "data": "麦麦"}, {"type": "image"}]),
+                         "continue", marked=True)
+        await self.check(self.message(), "abort", appended=True)
+
+    async def test_native_interaction_does_not_open_window(self):
+        await self.configure(config([
+            rule("native", [{"kind": "interaction", "types": ["at_bot"]}]),
+            rule("context_only")]))
+        await self.check(self.message([{"type": "at", "data": {"target_user_id": "9"}}]), "continue")
+        self.assertFalse(self.plugin._windows.windows)
+
+    async def test_send_renewal_and_cap(self):
+        with patch.object(self.plugin, "_now", return_value=10):
+            await self.check(self.message([{"type": "text", "data": "麦麦"}]), "continue", marked=True)
+        window = next(iter(self.plugin._windows.windows.values()))
+        with patch.object(self.plugin, "_now", return_value=40):
+            await self.check(self.message(), "continue", marked=True)
+        self.assertEqual(window.deadline, 70)
+        with patch.object(self.plugin, "_now", return_value=50):
+            await self.plugin.renew_followup(sent=False, message={"session_id": "s12", "account_id": "9"})
+            self.assertEqual(window.deadline, 70)
+            await self.plugin.renew_followup(sent=True, message={"session_id": "s12", "account_id": "9"})
+        self.assertEqual(window.deadline, 110)
+        with patch.object(self.plugin, "_now", return_value=110):
+            await self.check(self.message(), "abort", appended=True)
+
+    async def test_distinct_messages_do_not_block_each_other(self):
+        arrived = 0
+        ready = asyncio.Event()
+        async def append(*args, **kwargs):
+            nonlocal arrived
+            arrived += 1
+            if arrived == 2:
+                ready.set()
+            await ready.wait()
+            return {"success": True}
+        self.append.side_effect = append
+        first, second = self.message(), self.message(user="35")
+        results = await asyncio.wait_for(asyncio.gather(
+            self.plugin.filter_message(message=first),
+            self.plugin.filter_message(message=second)), 2)
+        self.assertEqual(results, [{"action": "abort"}, {"action": "abort"}])
+
+    async def test_config_change_during_lookup_does_not_reopen_old_window(self):
+        started, release = asyncio.Event(), asyncio.Event()
+        async def lookup(*args, **kwargs):
+            started.set()
+            await release.wait()
+            return {"message_info": {"user_info": {"user_id": "9"}}}
+        self.lookup.side_effect = lookup
+        message = self.message([{"type": "reply", "data": {"target_message_id": "42"}}])
+        pending = asyncio.create_task(self.plugin.filter_message(message=message))
+        await asyncio.wait_for(started.wait(), 1)
+        await self.configure(config([rule("context_only")]))
+        release.set()
+        self.assertEqual(await pending, {"action": "abort"})
+        self.assertFalse(self.plugin._windows.windows)

@@ -1,55 +1,55 @@
-"""Pure message matching, independent of MaiBot."""
-import re
+"""Ordered matching and in-memory follow-up windows."""
 from dataclasses import dataclass
+import re
+
 
 @dataclass(frozen=True)
 class Rule:
+    index: int
     name: str
-    scope: str
-    ids: tuple
+    groups: tuple
+    users: tuple
     conditions: tuple
+    action: str
     reply: str
+    window_seconds: int
+    max_active_seconds: int
 
 
 def compile_rules(data):
+    """Compile data already validated by WatchDogConfig."""
+    if not data["plugin"]["enabled"]:
+        return ()
     result = []
-    for item in data.get("rules", []):
-        if not item.get("enabled", True):
+    defaults = data["follow_up"]
+    for index, row in enumerate(data["rules"]):
+        if not row["enabled"]:
             continue
-        name = item.get("name", "")
-        scope = item.get("scope", "global")
-        ids = tuple(str(x) for x in item.get("ids", []))
+        action = row["action"]
         conditions = []
-        if not name or scope not in ("global", "groups", "private"):
-            raise ValueError("Invalid rule name or scope")
-        if scope == "groups" and not ids:
-            raise ValueError(f"{name}: groups requires ids")
-        for c in item.get("conditions", []):
-            kind = c["kind"]
-            if kind == "sender_qq":
-                senders = c.get("ids")
-                if not isinstance(senders, list) or not senders or not all(
-                    type(x) in (str, int) and str(x).isascii() and str(x).isdigit()
-                    for x in senders
-                ):
-                    raise ValueError(f"{name}: sender_qq requires a non-empty list of QQ IDs")
-                conditions.append((kind, frozenset(map(str, senders))))
-                continue
-            if kind not in ("image", "forward", "poke", "poke_except_bot", "text_regex"):
-                raise ValueError(f"{name}: unknown condition")
-            try:
-                pattern = re.compile(c["pattern"]) if kind == "text_regex" else None
-            except re.error as exc:
-                raise ValueError(f"{name}: invalid regex") from exc
-            conditions.append((kind, pattern))
-        if not conditions:
-            raise ValueError(f"{name}: empty conditions")
-        result.append(Rule(name, scope, ids, tuple(conditions), item.get("reply", "")))
-    return tuple(result) if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else ()
+        for condition in row["condition"]:
+            kind = condition["kind"]
+            value = None
+            if kind == "text_regex":
+                value = re.compile(condition["pattern"])
+            elif kind == "interaction":
+                value = frozenset(condition["types"])
+            conditions.append((kind, value))
+        result.append(Rule(
+            index, row["name"], tuple(row["group"]), tuple(row["user"]), tuple(conditions),
+            action["kind"], action["reply"],
+            action["window_seconds"] or defaults["window_seconds"],
+            action["max_active_seconds"] or defaults["max_active_seconds"],
+        ))
+    return tuple(result)
+
+
+def message_info(message):
+    return message.get("message_info") or message
 
 
 def poke_kind(message):
-    info = message.get("message_info") or message
+    info = message_info(message)
     notice = info.get("additional_config") or {}
     payload = notice.get("napcat_notice_payload")
     event = message.get("event")
@@ -66,22 +66,53 @@ def poke_kind(message):
     return "poke_bot" if target.isascii() and target.isdigit() and target == account else "poke_except_bot"
 
 
+def outer_segments(message):
+    raw = message.get("raw_message", message.get("message_segment", []))
+    def walk(value, depth=0):
+        if depth > 64:
+            return
+        if isinstance(value, list):
+            for segment in value:
+                yield from walk(segment, depth + 1)
+        elif isinstance(value, dict):
+            if value.get("type") == "seglist":
+                yield from walk(value.get("data", []), depth + 1)
+            else:
+                yield value
+    return list(walk(raw))
+
+
+def text_value(segment):
+    data = segment.get("data", segment.get("content", ""))
+    if isinstance(data, dict):
+        return str(data.get("text", ""))
+    return data if isinstance(data, str) else ""
+
+
+def adjacent_texts(segments):
+    texts, run = [], []
+    for segment in segments:
+        if segment.get("type") == "text":
+            run.append(text_value(segment))
+        elif run:
+            texts.append("".join(run))
+            run = []
+    if run:
+        texts.append("".join(run))
+    return texts
+
+
 def inspect_message(message):
     kinds, texts = set(), []
     def walk(value, depth=0):
         if depth > 64:
             return
         if isinstance(value, list):
-            run = []
-            for v in value:
-                if isinstance(v, dict) and v.get("type") == "text":
-                    run.append(str(v.get("data", v.get("content", ""))))
-                else:
-                    if run:
-                        texts.append("".join(run)); run = []
-                    walk(v, depth + 1)
-            if run:
-                texts.append("".join(run))
+            segments = [v for v in value if isinstance(v, dict)]
+            texts.extend(adjacent_texts(segments))
+            for segment in segments:
+                if segment.get("type") != "text":
+                    walk(segment, depth + 1)
         elif isinstance(value, dict):
             kind = value.get("type")
             if kind == "image":
@@ -90,10 +121,10 @@ def inspect_message(message):
                 kinds.add("forward")
                 walk(value.get("data", value.get("content")), depth + 1)
             elif kind == "text":
-                texts.append(str(value.get("data", value.get("content", ""))))
+                texts.append(text_value(value))
             elif kind == "seglist":
                 walk(value.get("data", []), depth + 1)
-            else:
+            elif kind != "reply":
                 for key in ("content", "message", "nodes"):
                     if key in value:
                         walk(value[key], depth + 1)
@@ -104,61 +135,74 @@ def inspect_message(message):
     return kinds, texts
 
 
-def first_match(rules, message):
-    info = message.get("message_info", message)
+def ordinary_message(message, account):
+    info = message_info(message)
+    user = str((info.get("user_info") or {}).get("user_id") or "")
+    notice = info.get("additional_config") or {}
+    return bool(user) and user != account and not (
+        message.get("is_notify") or poke_kind(message) or notice.get("napcat_notice_type")
+    )
+
+
+def scope_matches(rule, message):
+    info = message_info(message)
     group = (info.get("group_info") or {}).get("group_id")
-    user = (info.get("user_info") or {}).get("user_id")
-    kinds, texts = inspect_message(message)
-    def matches(condition):
-        kind, value = condition
-        if kind == "sender_qq":
-            platform = message.get("platform") or info.get("platform")
-            return platform == "qq" and str(user) in value
-        if kind == "text_regex":
-            return any(value.search(text) for text in texts)
-        return kind in kinds
-
-    for r in rules:
-        if r.scope == "groups" and (group is None or str(group) not in r.ids):
-            continue
-        if r.scope == "private" and (group is not None or (r.ids and str(user) not in r.ids)):
-            continue
-        if all(matches(condition) for condition in r.conditions):
-            return r
-    return None
+    group_key = str(group) if group is not None and str(group) else "private"
+    user = str((info.get("user_info") or {}).get("user_id") or "")
+    return ("*" in rule.groups or group_key in rule.groups) and (
+        "*" in rule.users or user in rule.users
+    )
 
 
-@dataclass(frozen=True)
-class ContextRule:
-    probability: float
-    allow_at: bool
-    allow_reply: bool
-    allow_poke: bool
+def static_matches(rule, kinds, texts):
+    for kind, value in rule.conditions:
+        if kind == "text_regex" and not any(value.search(text) for text in texts):
+            return False
+        if kind not in ("text_regex", "interaction") and kind not in kinds:
+            return False
+    return True
 
 
-def compile_context_rules(data, section="context_only"):
-    index = {}
-    rows = data.get(section, [])
-    if not isinstance(rows, list):
-        raise ValueError(f"{section} 必须是规则列表")
-    for n, row in enumerate(rows, 1):
-        if not isinstance(row, dict):
-            raise ValueError(f"{section} #{n}: 配置必须为表")
-        targets = [row.get("group_id")] if section == "group_context_only" else row.get("user_ids")
-        if not isinstance(targets, list) or not targets or not all(
-            isinstance(x, (str, int)) and str(x).isascii() and str(x).isdigit()
-            for x in targets
-        ):
-            raise ValueError(f"{section} #{n}: 请检查目标群号或发送者 QQ 号")
-        probability = row.get("planner_pass_probability", 0.0)
-        if type(probability) not in (float, int) or not 0 <= probability <= 1:
-            raise ValueError(f"{section} #{n}: 放行概率必须在 0 到 1 之间")
-        at = row.get("allow_planner_on_at_bot", True)
-        reply = row.get("allow_planner_on_reply_to_bot", True)
-        poke = row.get("allow_planner_on_poke_bot", False)
-        if any(type(flag) is not bool for flag in (at, reply, poke)):
-            raise ValueError(f"{section} #{n}: 例外开关必须是布尔值")
-        rule = ContextRule(probability, at, reply, poke)
-        for target in targets:
-            index.setdefault(str(target), rule)
-    return index if data.get("plugin", {}).get("enabled", data.get("enabled", True)) else {}
+@dataclass
+class Window:
+    deadline: float
+    cap_at: float
+    last_spoke_at: float
+    seconds: int
+
+
+class WindowTracker:
+    """Per-rule/account/session/user windows; renewal follows gsskk's MIT logic."""
+
+    def __init__(self):
+        self.windows = {}
+
+    def expire(self, now):
+        for key, window in list(self.windows.items()):
+            if window.deadline <= now:
+                del self.windows[key]
+
+    def active(self, key, now):
+        window = self.windows.get(key)
+        return window is not None and window.deadline > now
+
+    def interact(self, key, now, seconds, maximum):
+        if self.active(key, now):
+            window = self.windows[key]
+            window.deadline = min(now + seconds, window.cap_at)
+            window.last_spoke_at = now
+        else:
+            self.windows[key] = Window(now + seconds, now + maximum, now, seconds)
+
+    def speak(self, key, now):
+        if self.active(key, now):
+            self.windows[key].last_spoke_at = now
+
+    def renew_sent(self, session, account, now):
+        self.expire(now)
+        for (_, bot, stream, _), window in self.windows.items():
+            if stream == session and (not account or account == bot) and now - window.last_spoke_at <= window.seconds:
+                window.deadline = min(now + window.seconds, window.cap_at)
+
+    def clear(self):
+        self.windows.clear()
