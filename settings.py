@@ -19,27 +19,8 @@ class SettingsBase(PluginConfigBase):
 
 class PluginSettings(SettingsBase):
     __ui_label__ = "插件"
-    config_version: Literal["0.4.0"] = ui("0.4.0", label="配置版本", disabled=True)
+    config_version: Literal["0.5.0"] = ui("0.5.0", label="配置版本", disabled=True)
     enabled: bool = ui(True, label="启用 Watch Dog")
-
-
-class FollowUpSettings(SettingsBase):
-    __ui_label__ = "跟进窗口"
-    window_seconds: int = ui(60, label="单次窗口（秒）")
-    max_active_seconds: int = ui(300, label="本轮上限（秒）")
-
-    @field_validator("window_seconds", "max_active_seconds", mode="before")
-    @classmethod
-    def positive_seconds(cls, value):
-        if type(value) is not int or value <= 0:
-            raise ValueError("窗口时长必须是正整数")
-        return value
-
-    @model_validator(mode="after")
-    def valid_window(self):
-        if self.max_active_seconds < self.window_seconds:
-            raise ValueError("本轮上限不能短于单次窗口")
-        return self
 
 
 class Condition(SettingsBase):
@@ -66,14 +47,14 @@ class Condition(SettingsBase):
 class Action(SettingsBase):
     kind: Literal["block", "follow_up", "context_only", "native"] = ui("native", label="动作")
     reply: str = ui("", label="固定回复")
-    window_seconds: int = ui(0, label="窗口覆盖（0 继承）")
-    max_active_seconds: int = ui(0, label="上限覆盖（0 继承）")
+    window_seconds: int = ui(0, label="窗口覆盖（0 用默认值）")
+    max_active_seconds: int = ui(0, label="上限覆盖（0 用默认值）")
 
     @field_validator("window_seconds", "max_active_seconds", mode="before")
     @classmethod
     def nonnegative_seconds(cls, value):
         if type(value) is not int or value < 0:
-            raise ValueError("动作时长必须是非负整数，0 表示继承")
+            raise ValueError("动作时长必须是非负整数，0 表示使用默认值")
         return value
 
     @model_validator(mode="after")
@@ -86,19 +67,33 @@ class Action(SettingsBase):
 
 
 class RuleSettings(SettingsBase):
-    name: str = ui("新规则", label="规则名称")
+    name: str | None = ui(None, label="规则名称")
     enabled: bool = ui(True, label="启用此规则")
-    group: list[str] = ui(default_factory=lambda: ["*"], label="群范围（* 含私聊；private 仅私聊）")
-    user: list[str] = ui(default_factory=lambda: ["*"], label="发送者 QQ（* 表示全部）")
     condition: list[Condition] = ui(default_factory=list, label="额外条件（全部满足）")
     action: Action = ui(default_factory=Action, label="动作（在原始 TOML 中编辑）")
 
     @field_validator("name")
     @classmethod
     def named(cls, value):
-        if not value.strip():
+        if value is not None and not value.strip():
             raise ValueError("规则名称不能为空")
         return value
+
+    @model_validator(mode="after")
+    def followup_requires_interaction(self):
+        if self.action.kind == "follow_up" and not any(
+            c.kind == "interaction" for c in self.condition
+        ):
+            raise ValueError("follow_up 规则必须含 interaction 条件")
+        return self
+
+
+class RouteSettings(SettingsBase):
+    group: list[str] = ui(
+        default_factory=lambda: ["*"], label="群范围（* 含私聊；private 仅私聊）"
+    )
+    user: list[str] = ui(default_factory=lambda: ["*"], label="发送者 QQ（* 表示全部）")
+    use: list[str] = ui(default_factory=list, label="按顺序使用的规则组")
 
     @field_validator("group", "user", mode="before")
     @classmethod
@@ -116,51 +111,48 @@ class RuleSettings(SettingsBase):
             result.append(item)
         return result
 
-    @model_validator(mode="after")
-    def followup_requires_interaction(self):
-        if self.action.kind == "follow_up" and not any(c.kind == "interaction" for c in self.condition):
-            raise ValueError("follow_up 规则必须含 interaction 条件")
-        return self
+    @field_validator("use")
+    @classmethod
+    def valid_use(cls, value: list[str]) -> list[str]:
+        if not value:
+            raise ValueError("use 至少需要一个规则组")
+        return value
 
 
 class WatchDogConfig(SettingsBase):
     plugin: PluginSettings = Field(default_factory=PluginSettings)
-    follow_up: FollowUpSettings = Field(default_factory=FollowUpSettings)
-    rules: list[RuleSettings] = ui(
-        default_factory=list, label="按顺序匹配的规则",
-        hint="第一条完整命中后结束。动作 action 在原始 TOML 编辑，可填 block / follow_up / context_only / native。")
+    routes: list[RouteSettings] = ui(
+        default_factory=list,
+        label="按顺序匹配的路由",
+        hint="选中第一条匹配的路由，按 use 顺序检查规则组。规则组在原始 TOML 编辑。",
+    )
+    rule_groups: dict[str, list[RuleSettings]] = ui(
+        default_factory=dict, label="规则组"
+    )
 
     @model_validator(mode="after")
-    def effective_durations(self):
-        for rule in self.rules:
-            window = rule.action.window_seconds or self.follow_up.window_seconds
-            maximum = rule.action.max_active_seconds or self.follow_up.max_active_seconds
-            if maximum < window:
-                raise ValueError(f"{rule.name}：本轮上限不能短于单次窗口")
+    def validate_groups(self):
+        for key, rules in self.rule_groups.items():
+            if not re.fullmatch(r"[a-z][a-z0-9_]*", key):
+                raise ValueError(f"规则组名须使用英文小写、数字或下划线：{key}")
+            for rule in rules:
+                if (rule.action.window_seconds or 60) > (
+                    rule.action.max_active_seconds or 300
+                ):
+                    raise ValueError(f"{key}/{rule.name}：本轮上限不能短于单次窗口")
+        for i, route in enumerate(self.routes, 1):
+            for key in route.use:
+                if key not in self.rule_groups:
+                    raise ValueError(f"第 {i} 条 route 引用了未定义的规则组：{key}")
         return self
 
 
-def complete_rule_schema(schema):
-    """Complete the SDK's shallow list schema. Action uses the raw TOML editor.
-
-    Object fields omitted from this visual form survive existing-object edits.
-    New rows default to disabled until their action is configured.
-    """
+def complete_rule_schema(schema: dict) -> dict:
+    """Expose ordered selectors; dynamic rule definitions use the raw TOML editor."""
     for section in schema.get("sections", {}).values():
-        field = section.get("fields", {}).get("rules")
-        if field is None:
-            continue
-        fields = field["item_fields"]
-        fields.pop("action", None)
-        fields["enabled"]["default"] = False
-        fields["group"].update(item_type="string")
-        fields["user"].update(item_type="string")
-        fields["condition"].update(item_type="object", item_fields={
-            "kind": {"type": "select", "label": "条件类型", "default": "interaction",
-                     "choices": ["text_regex", "image", "forward", "poke", "poke_except_bot", "interaction"]},
-            "pattern": {"type": "string", "label": "正则（仅 text_regex 使用）", "default": ""},
-            "types": {"type": "select", "label": "互动类型（任一命中）", "multiple": True,
-                      "default": ["at_bot", "reply_to_bot"],
-                      "choices": ["nickname", "at_bot", "reply_to_bot", "poke_bot", "message"]},
-        })
+        fields = section.get("fields", {})
+        fields.pop("rule_groups", None)
+        if "routes" in fields:
+            for key in ("group", "user", "use"):
+                fields["routes"]["item_fields"][key]["item_type"] = "string"
     return schema

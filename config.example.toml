@@ -1,51 +1,68 @@
-# 示例配置：请把现有屏蔽规则放在留步与上下文规则之前。
 [plugin]
-config_version = "0.4.0"
+config_version = "0.5.0"
 enabled = true
 
-[follow_up]
-window_seconds = 60
-max_active_seconds = 300
+# 第一部分：group 与 user 同时匹配，取首条 route；* 包含群聊和私聊。
+# 按 use 的顺序进入规则组；组内从上往下检查，首条命中即结束。
 
-# 从上到下，第一条完整命中后结束。无规则命中时走原生流程。
-# group：["*"] 含群聊及私聊；["private"] 仅私聊；也可列多个群号。
-# user：["*"] 表示全部，或列多个 QQ。group/user 列表内部任意匹配。
-# condition：全部满足；[] 表示无额外限制。
-# kind：image / forward / poke / poke_except_bot / text_regex / interaction。
-# text_regex 需 pattern，按 search 匹配。转发节点分别匹配，不跨节点拼接。
-# interaction.types 任一匹配：
-# nickname / at_bot / reply_to_bot / poke_bot / message。
-# 有效窗口仅使 follow_up 规则的 interaction 对普通消息成立。
-# action.kind：block / follow_up / context_only / native。
-# block 可指定 reply，空或省略为静默屏蔽。
-# follow_up 可指定 window_seconds/max_active_seconds；省略或 0 继承全局。
-# 每条规则可指定 enabled，默认 true。WebUI 新增行默认关闭。
-
-[[rules]]
-name = "示例账号屏蔽（填写后启用）"
-enabled = false
+# 机器人黑名单，群聊和私聊都生效
+[[routes]]
 group = ["*"]
-user = ["20001"]
-condition = []
-action = { kind = "block", reply = "" }
+user = ["10001"]  # 示例：替换为要完全屏蔽的 QQ
+use = ["block"]
 
-[[rules]]
-name = "屏蔽其他戳一戳"
+# 私聊
+[[routes]]
+group = ["private"]
+user = ["*"]
+use = ["common", "native"]
+
+[[routes]]
+group = ["20001"]  # 示例互动群
+user = ["*"]
+use = ["common", "at_bot", "context_only"]
+
+# 普通消息走原生门控的群
+[[routes]]
+group = [
+  "20002",  # 示例原生门控群
+]
+user = ["*"]
+use = ["common", "follow_up", "native"]
+
+# 其他会话；私聊已由上方分流
+[[routes]]
 group = ["*"]
 user = ["*"]
-condition = [{ kind = "poke_except_bot" }]
-action = { kind = "block" }
+use = ["common", "follow_up", "context_only"]
 
-[[rules]]
-name = "互动开窗及连续追问"
-group = ["*"]
-user = ["*"]
-condition = [{ kind = "interaction", types = ["nickname", "at_bot", "reply_to_bot"] }]
-action = { kind = "follow_up" }
+# 第二部分：键为规则组名称，值为组内按顺序执行的规则。
+# condition 省略表示无条件；有多个条件时，全部满足才命中。
+# interaction.types 命中其中一项即可；留步动作也支持有效窗口内的追问。
+[rule_groups]
 
-[[rules]]
-name = "其余消息只入上下文"
-group = ["*"]
-user = ["*"]
-condition = []
-action = { kind = "context_only" }
+block = [
+  { action = { kind = "block" } },
+]
+
+common = [
+  { name = "屏蔽转发消息", condition = [{ kind = "forward" }], action = { kind = "block" } },
+  { name = "屏蔽其他戳一戳", condition = [{ kind = "poke_except_bot" }], action = { kind = "block" } },
+  { name = "/ping", condition = [{ kind = "text_regex", pattern = "^\\s*/ping\\s*$" }], action = { kind = "block", reply = "pong!" } },
+]
+
+at_bot = [
+  { condition = [{ kind = "interaction", types = ["at_bot", "reply_to_bot"] }], action = { kind = "native" } },
+]
+
+follow_up = [
+  { condition = [{ kind = "interaction", types = ["nickname", "at_bot", "reply_to_bot"] }], action = { kind = "follow_up", window_seconds = 60, max_active_seconds = 300 } },
+]
+
+native = [
+  { action = { kind = "native" } },
+]
+
+context_only = [
+  { action = { kind = "context_only" } },
+]

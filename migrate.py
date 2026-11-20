@@ -9,6 +9,8 @@ import tomllib
 def migrate_config(old):
     if old.get("plugin", {}).get("config_version") == "0.4.0":
         return deepcopy(old)
+    if old.get("plugin", {}).get("config_version") == "0.5.0":
+        raise ValueError("此工具仅用于旧配置迁移到 v0.4")
     converted = []
     for row in old.get("rules", []):
         scope = row.get("scope", "global")

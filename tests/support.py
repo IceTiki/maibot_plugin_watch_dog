@@ -38,13 +38,24 @@ Config = module.settings.WatchDogConfig
 
 
 def rule(kind, conditions=None, **kwargs):
-    return {"name": kind, "group": ["*"], "user": ["*"],
-            "condition": conditions or [], "action": {"kind": kind}, **kwargs}
+    return {
+        "name": kind,
+        "condition": conditions or [],
+        "action": {"kind": kind},
+        **kwargs,
+    }
+
+
+def route(use, group=None, user=None):
+    return {"group": group or ["*"], "user": user or ["*"], "use": use}
 
 
 def config(rows):
-    return {"plugin": {"config_version": "0.4.0", "enabled": True},
-            "follow_up": {"window_seconds": 60, "max_active_seconds": 300}, "rules": rows}
+    return {
+        "plugin": {"config_version": "0.5.0", "enabled": True},
+        "routes": [route(["main"])],
+        "rule_groups": {"main": rows},
+    }
 
 
 def standard():

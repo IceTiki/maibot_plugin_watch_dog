@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "local.watch-dog",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "name": "Watch Dog",
   "description": "按顺序匹配的消息过滤、上下文追加与互动跟进窗口",
   "author": {

@@ -44,7 +44,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bool(after.get("modified_kwargs", {}).get("message", {}).get("is_mentioned")), marked)
 
     async def configure(self, data):
-        await self.plugin.on_config_update("self", data, "0.4.0")
+        await self.plugin.on_config_update("self", data, "0.5.0")
 
     async def test_group_private_nickname_and_at_windows(self):
         for group in ["12", "20001", None]:
@@ -57,13 +57,42 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_first_complete_match_no_action_priority(self):
         msg = self.message([{"type": "at", "data": {"target_user_id": "9"}}])
-        await self.configure(config([rule("context_only"), *standard()["rules"]]))
+        await self.configure(
+            config([rule("context_only"), *standard()["rule_groups"]["main"]])
+        )
         await self.check(msg, "abort", appended=True)
         await self.configure(config([rule("native"), rule("block")]))
         await self.check(self.message(), "continue")
-        await self.configure(config([rule("block", user=["34"]), *standard()["rules"]]))
+        await self.configure(
+            config([rule("block"), *standard()["rule_groups"]["main"]])
+        )
         await self.check(self.message([{"type": "at", "data": {"target_user_id": "9"}}]), "abort")
         self.assertEqual(self.plugin._windows.windows, {})
+
+    async def test_first_route_exclusive_and_group_order(self):
+        data = config([])
+        data["routes"] = [
+            {"group": ["12"], "user": ["*"], "use": ["empty", "checks", "window"]},
+            {"group": ["*"], "user": ["*"], "use": ["fallback"]},
+        ]
+        data["rule_groups"] = {
+            "empty": [],
+            "checks": [rule("block", [{"kind": "text_regex", "pattern": "^stop$"}])],
+            "window": [
+                rule("follow_up", [{"kind": "interaction", "types": ["at_bot"]}])
+            ],
+            "fallback": [rule("context_only")],
+        }
+        await self.configure(data)
+        await self.check(
+            self.message(), "continue"
+        )  # A route miss must not try fallback.
+        await self.check(self.message(group="13"), "abort", appended=True)
+        await self.check(
+            self.message([{"type": "at", "data": "9"}]), "continue", marked=True
+        )
+        await self.check(self.message([{"type": "text", "data": "stop"}]), "abort")
+        await self.check(self.message(), "continue", marked=True)
 
     async def test_quote_detection_and_failure(self):
         await self.check(self.message([{"type": "reply", "data": {"target_message_sender_id": "9"}}]),
@@ -89,7 +118,14 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
         msg["message_info"]["additional_config"] = {"napcat_notice_payload":
             {"sub_type": "poke", "target_id": 9, "self_id": 9}}
         await self.check(msg, "abort", appended=True)
-        await self.configure(config([rule("block", [{"kind": "poke_except_bot"}]), *standard()["rules"]]))
+        await self.configure(
+            config(
+                [
+                    rule("block", [{"kind": "poke_except_bot"}]),
+                    *standard()["rule_groups"]["main"],
+                ]
+            )
+        )
         msg["message_info"]["additional_config"]["napcat_notice_payload"]["target_id"] = 8
         await self.check(msg, "abort")
 
@@ -114,11 +150,11 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disabled_and_invalid_update(self):
         await self.check(self.message([{"type": "text", "data": "麦麦"}]), "continue", marked=True)
-        rules = self.plugin._rules
+        rules = self.plugin._routes
         invalid = standard()
-        invalid["rules"][0]["condition"][0]["types"] = ["unknown"]
+        invalid["rule_groups"]["main"][0]["condition"][0]["types"] = ["unknown"]
         await self.configure(invalid)
-        self.assertIs(self.plugin._rules, rules)
+        self.assertIs(self.plugin._routes, rules)
         self.assertTrue(self.plugin._windows.windows)
         valid = standard()
         valid["plugin"]["enabled"] = False
@@ -128,7 +164,7 @@ class HookTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_static_condition_still_required_in_window(self):
         data = standard()
-        data["rules"][0]["condition"].append({"kind": "image"})
+        data["rule_groups"]["main"][0]["condition"].append({"kind": "image"})
         await self.configure(data)
         await self.check(self.message([{"type": "text", "data": "麦麦"}, {"type": "image"}]),
                          "continue", marked=True)

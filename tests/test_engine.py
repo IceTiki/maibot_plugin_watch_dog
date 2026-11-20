@@ -4,16 +4,22 @@ import unittest
 
 class MatchingTests(unittest.TestCase):
     def test_scope_and_conditions(self):
-        r = engine.compile_rules(Config.model_validate(config([
-            rule("block", [{"kind": "image"}, {"kind": "text_regex", "pattern": "spam"}],
-                 group=["12"], user=["34"])
-        ])).model_dump())[0]
+        data = config(
+            [
+                rule(
+                    "block",
+                    [{"kind": "image"}, {"kind": "text_regex", "pattern": "spam"}],
+                )
+            ]
+        )
+        data["routes"][0].update(group=["12"], user=["34"])
+        routes = engine.compile_routes(Config.model_validate(data).model_dump())
         msg = {"group_info": {"group_id": 12}, "user_info": {"user_id": 34},
                "raw_message": [{"type": "image"}, {"type": "text", "data": "spam"}]}
-        self.assertTrue(engine.scope_matches(r, msg))
+        (r,) = engine.select_rules(routes, msg)
         self.assertTrue(engine.static_matches(r, *engine.inspect_message(msg)))
         msg["user_info"]["user_id"] = "35"
-        self.assertFalse(engine.scope_matches(r, msg))
+        self.assertFalse(engine.select_rules(routes, msg))
         msg["raw_message"] = [{"type": "image", "data": "spam"}]
         self.assertFalse(engine.static_matches(r, *engine.inspect_message(msg)))
 

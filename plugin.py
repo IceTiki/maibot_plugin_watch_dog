@@ -1,4 +1,5 @@
-"""Watch Dog v0.4: first complete match wins."""
+"""Watch Dog v0.5: first complete match wins."""
+
 from collections import OrderedDict
 from pathlib import Path
 import asyncio
@@ -52,8 +53,8 @@ class WatchDogPlugin(MaiBotPlugin):
         self._names = ()
         self._names_until = 0.0
         data = self.config_model.model_validate(self.get_plugin_config_data()).model_dump()
-        self._rules = engine.compile_rules(data)
-        self.ctx.logger.info("Watch Dog v0.4.0 已加载，规则 %s 条", len(self._rules))
+        self._routes = engine.compile_routes(data)
+        self.ctx.logger.info("Watch Dog v0.5.0 已加载，路由 %s 条", len(self._routes))
 
     async def on_unload(self):
         pending = [*self._tasks, *self._inflight.values()]
@@ -69,7 +70,7 @@ class WatchDogPlugin(MaiBotPlugin):
             return
         try:
             data = self.config_model.model_validate(config_data).model_dump()
-            rules = engine.compile_rules(data)
+            rules = engine.compile_routes(data)
         except (ValueError, KeyError, TypeError) as exc:
             # Report field locations without dumping the supplied config.
             details = type(exc).__name__
@@ -81,7 +82,7 @@ class WatchDogPlugin(MaiBotPlugin):
             self.ctx.logger.error("Watch Dog 配置校验失败，保留上一份有效配置：%s", details)
             return
         async with self._lock:
-            self._rules = rules
+            self._routes = rules
             self._windows.clear()
             self._recent.clear()
         self.ctx.logger.info("Watch Dog 规则已更新，跟进窗口已清空")
@@ -222,7 +223,10 @@ class WatchDogPlugin(MaiBotPlugin):
             self._recent.pop(key)
 
     async def _evaluate(self, message, kwargs):
-        rules = self._rules
+        routes = self._routes
+        rules = engine.select_rules(routes, message)
+        if not rules:
+            return "continue", False
         kinds, texts = engine.inspect_message(message)
         account = str(message.get("account_id") or "")
         user = str((engine.message_info(message).get("user_info") or {}).get("user_id") or "")
@@ -232,7 +236,7 @@ class WatchDogPlugin(MaiBotPlugin):
             if kind == "interaction" for value in values
         )
         for rule in rules:
-            if not engine.scope_matches(rule, message) or not engine.static_matches(rule, kinds, texts):
+            if not engine.static_matches(rule, kinds, texts):
                 continue
             interaction_conditions = [value for kind, value in rule.conditions if kind == "interaction"]
             window_key = None
@@ -253,7 +257,7 @@ class WatchDogPlugin(MaiBotPlugin):
                     self.ctx.logger.warning("Watch Dog 无法确认互动（%s），消息 %s",
                                             type(exc).__name__, message.get("message_id"))
                     continue
-                if rules is not self._rules:
+                if routes is not self._routes:
                     return await self._evaluate(message, kwargs)
                 if not all(active or bool(types & interactions) for types in interaction_conditions):
                     continue

@@ -5,10 +5,8 @@ import re
 
 @dataclass(frozen=True)
 class Rule:
-    index: int
+    index: tuple[str, int]
     name: str
-    groups: tuple
-    users: tuple
     conditions: tuple
     action: str
     reply: str
@@ -16,32 +14,58 @@ class Rule:
     max_active_seconds: int
 
 
-def compile_rules(data):
-    """Compile data already validated by WatchDogConfig."""
+@dataclass(frozen=True)
+class Route:
+    groups: tuple[str, ...]
+    users: tuple[str, ...]
+    rules: tuple[Rule, ...]
+
+
+def compile_routes(data: dict) -> tuple[Route, ...]:
+    """Compile groups once and resolve route references in declaration order."""
     if not data["plugin"]["enabled"]:
         return ()
-    result = []
-    defaults = data["follow_up"]
-    for index, row in enumerate(data["rules"]):
-        if not row["enabled"]:
-            continue
-        action = row["action"]
-        conditions = []
-        for condition in row["condition"]:
-            kind = condition["kind"]
-            value = None
-            if kind == "text_regex":
-                value = re.compile(condition["pattern"])
-            elif kind == "interaction":
-                value = frozenset(condition["types"])
-            conditions.append((kind, value))
-        result.append(Rule(
-            index, row["name"], tuple(row["group"]), tuple(row["user"]), tuple(conditions),
-            action["kind"], action["reply"],
-            action["window_seconds"] or defaults["window_seconds"],
-            action["max_active_seconds"] or defaults["max_active_seconds"],
-        ))
-    return tuple(result)
+    groups = {}
+    for group, rows in data["rule_groups"].items():
+        compiled = []
+        for i, row in enumerate(rows, 1):
+            if not row["enabled"]:
+                continue
+            action = row["action"]
+            conditions = []
+            for condition in row["condition"]:
+                kind = condition["kind"]
+                value = None
+                if kind == "text_regex":
+                    value = re.compile(condition["pattern"])
+                elif kind == "interaction":
+                    value = frozenset(condition["types"])
+                conditions.append((kind, value))
+            compiled.append(
+                Rule(
+                    (group, i),
+                    f"{group}/{row['name'] or i}",
+                    tuple(conditions),
+                    action["kind"],
+                    action["reply"],
+                    action["window_seconds"] or 60,
+                    action["max_active_seconds"] or 300,
+                )
+            )
+        groups[group] = compiled
+    return tuple(
+        Route(
+            tuple(route["group"]),
+            tuple(route["user"]),
+            tuple(rule for key in route["use"] for rule in groups[key]),
+        )
+        for route in data["routes"]
+    )
+
+
+def select_rules(routes: tuple[Route, ...], message: dict) -> tuple[Rule, ...]:
+    """Select exactly one route even if its rule chain is empty or has no match."""
+    return next((route.rules for route in routes if scope_matches(route, message)), ())
 
 
 def message_info(message):
