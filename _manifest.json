@@ -10,7 +10,7 @@
   },
   "license": "MIT",
   "urls": {
-    "repository": "https://github.com/IceTiki/maimai_plugin_watch_dog"
+    "repository": "https://github.com/IceTiki/maibot_plugin_watch_dog"
   },
   "host_application": {
     "min_version": "1.0.0",
