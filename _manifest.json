@@ -6,11 +6,11 @@
   "description": "按顺序匹配的消息过滤、上下文追加与互动跟进窗口",
   "author": {
     "name": "Tiki",
-    "url": "https://github.com/"
+    "url": "https://github.com/IceTiki"
   },
   "license": "MIT",
   "urls": {
-    "repository": "https://github.com/"
+    "repository": "https://github.com/IceTiki/maimai_plugin_watch_dog"
   },
   "host_application": {
     "min_version": "1.0.0",
